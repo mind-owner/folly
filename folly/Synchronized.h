@@ -491,10 +491,10 @@ struct Synchronized : public SynchronizedBase<
 
   /**
    * Lets you construct non-movable types in-place. Use the constexpr
-   * instance `construct_in_place` as the first argument.
+   * instance `in_place` as the first argument.
    */
   template <typename... Args>
-  explicit Synchronized(construct_in_place_t, Args&&... args)
+  explicit Synchronized(in_place_t, Args&&... args)
       : datum_(std::forward<Args>(args)...) {}
 
   /**
@@ -626,7 +626,7 @@ struct Synchronized : public SynchronizedBase<
 
   /**
    * Attempts to acquire for a given number of milliseconds. If
-   * acquisition is unsuccessful, the returned LockedPtr is NULL.
+   * acquisition is unsuccessful, the returned LockedPtr is nullptr.
    *
    * NOTE: This API is deprecated.  Use lock(), wlock(), or rlock() instead.
    * In the future it will be marked with a deprecation attribute to emit
@@ -638,7 +638,7 @@ struct Synchronized : public SynchronizedBase<
 
   /**
    * Attempts to acquire for a given number of milliseconds. If
-   * acquisition is unsuccessful, the returned ConstLockedPtr is NULL.
+   * acquisition is unsuccessful, the returned ConstLockedPtr is nullptr.
    *
    * NOTE: This API is deprecated.  Use lock(), wlock(), or rlock() instead.
    * In the future it will be marked with a deprecation attribute to emit
@@ -1320,7 +1320,7 @@ void swap(Synchronized<T, M>& lhs, Synchronized<T, M>& rhs) {
  */
 #define SYNCHRONIZED(...)                                             \
   FOLLY_PUSH_WARNING                                                  \
-  FOLLY_GCC_DISABLE_WARNING(shadow)                                   \
+  FOLLY_GCC_DISABLE_WARNING("-Wshadow")                               \
   FOLLY_MSVC_DISABLE_WARNING(4189) /* initialized but unreferenced */ \
   FOLLY_MSVC_DISABLE_WARNING(4456) /* declaration hides local */      \
   FOLLY_MSVC_DISABLE_WARNING(4457) /* declaration hides parameter */  \

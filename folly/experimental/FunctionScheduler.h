@@ -42,7 +42,9 @@ namespace folly {
  *
  *
  * Note: the class uses only one thread - if you want to use more than one
- *       thread use multiple FunctionScheduler objects
+ *       thread, either use multiple FunctionScheduler objects, or check out
+ *       ThreadedRepeatingFunctionRunner.h for a much simpler contract of
+ *       "run each function periodically in its own thread".
  *
  * start() schedules the functions, while shutdown() terminates further
  * scheduling.
@@ -262,6 +264,12 @@ class FunctionScheduler {
       std::chrono::milliseconds startDelay,
       bool runOnce);
 
+  // Return true if the current function is being canceled
+  bool cancelAllFunctionsWithLock(std::unique_lock<std::mutex>& lock);
+  bool cancelFunctionWithLock(
+      std::unique_lock<std::mutex>& lock,
+      StringPiece nameID);
+
   std::thread thread_;
 
   // Mutex to protect our member variables.
@@ -283,6 +291,7 @@ class FunctionScheduler {
 
   std::string threadName_;
   bool steady_{false};
+  bool cancellingCurrentFunction_{false};
 };
 
 }

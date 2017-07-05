@@ -45,9 +45,9 @@
 #include <folly/io/async/HHWheelTimer.h>
 #include <folly/io/async/Request.h>
 #include <folly/io/async/TimeoutManager.h>
+#include <folly/portability/Event.h>
 #include <glog/logging.h>
 
-#include <event.h>  // libevent
 
 namespace folly {
 
@@ -221,7 +221,7 @@ class EventBase : private boost::noncopyable,
    *                              observer, max latency and avg loop time.
    */
   explicit EventBase(event_base* evb, bool enableTimeMeasurement = true);
-  ~EventBase();
+  ~EventBase() override;
 
   /**
    * Runs the event loop.
@@ -492,6 +492,18 @@ class EventBase : private boost::noncopyable,
         std::this_thread::get_id();
   }
 
+  /**
+   * Equivalent to CHECK(isInEventBaseThread()) (and assert/DCHECK for
+   * dcheckIsInEventBaseThread), but it prints more information on
+   * failure.
+   */
+  void checkIsInEventBaseThread() const;
+  void dcheckIsInEventBaseThread() const {
+    if (kIsDebug) {
+      checkIsInEventBaseThread();
+    }
+  }
+
   HHWheelTimer& timer() {
     if (!wheelTimer_) {
       wheelTimer_ = HHWheelTimer::newTimer(this);
@@ -515,7 +527,7 @@ class EventBase : private boost::noncopyable,
    * first handler fired within that cycle.
    *
    */
-  void bumpHandlingTime() override final;
+  void bumpHandlingTime() final;
 
   class SmoothLoopTime {
    public:
@@ -617,16 +629,16 @@ class EventBase : private boost::noncopyable,
   // TimeoutManager
   void attachTimeoutManager(
       AsyncTimeout* obj,
-      TimeoutManager::InternalEnum internal) override final;
+      TimeoutManager::InternalEnum internal) final;
 
-  void detachTimeoutManager(AsyncTimeout* obj) override final;
+  void detachTimeoutManager(AsyncTimeout* obj) final;
 
   bool scheduleTimeout(AsyncTimeout* obj, TimeoutManager::timeout_type timeout)
-      override final;
+      final;
 
-  void cancelTimeout(AsyncTimeout* obj) override final;
+  void cancelTimeout(AsyncTimeout* obj) final;
 
-  bool isInTimeoutManagerThread() override final {
+  bool isInTimeoutManagerThread() final {
     return isInEventBaseThread();
   }
 
@@ -641,7 +653,7 @@ class EventBase : private boost::noncopyable,
 
  protected:
   void keepAliveRelease() override {
-    DCHECK(isInEventBaseThread());
+    dcheckIsInEventBaseThread();
     loopKeepAliveCount_--;
   }
 
@@ -743,7 +755,6 @@ class EventBase : private boost::noncopyable,
   // see EventBaseLocal
   friend class detail::EventBaseLocalBase;
   template <typename T> friend class EventBaseLocal;
-  std::mutex localStorageMutex_;
   std::unordered_map<uint64_t, std::shared_ptr<void>> localStorage_;
   std::unordered_set<detail::EventBaseLocalBaseBase*> localStorageToDtor_;
 

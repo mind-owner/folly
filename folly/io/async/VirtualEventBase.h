@@ -43,7 +43,7 @@ class VirtualEventBase : public folly::Executor, public folly::TimeoutManager {
   VirtualEventBase(const VirtualEventBase&) = delete;
   VirtualEventBase& operator=(const VirtualEventBase&) = delete;
 
-  ~VirtualEventBase();
+  ~VirtualEventBase() override;
 
   EventBase& getEventBase() {
     return evb_;
@@ -137,7 +137,7 @@ class VirtualEventBase : public folly::Executor, public folly::TimeoutManager {
 
  protected:
   void keepAliveRelease() override {
-    DCHECK(getEventBase().isInEventBaseThread());
+    getEventBase().dcheckIsInEventBaseThread();
     if (loopKeepAliveCountAtomic_.load()) {
       loopKeepAliveCount_ += loopKeepAliveCountAtomic_.exchange(0);
     }

@@ -27,8 +27,7 @@
 #include <folly/Optional.h>
 #include <folly/ScopeGuard.h>
 #include <folly/Try.h>
-#include <folly/futures/Future.h>
-#include <folly/futures/Promise.h>
+#include <folly/futures/FutureException.h>
 #include <folly/futures/detail/FSM.h>
 
 #include <folly/io/async/Request.h>
@@ -101,7 +100,7 @@ class Core final {
   Core& operator=(Core&&) = delete;
 
   /// May call from any thread
-  bool hasResult() const {
+  bool hasResult() const noexcept {
     switch (fsm_.getState()) {
       case State::OnlyResult:
       case State::Armed:
@@ -115,7 +114,7 @@ class Core final {
   }
 
   /// May call from any thread
-  bool ready() const {
+  bool ready() const noexcept {
     return hasResult();
   }
 
@@ -240,7 +239,7 @@ class Core final {
       interruptLock_.lock();
     }
     if (!interrupt_ && !hasResult()) {
-      interrupt_ = folly::make_unique<exception_wrapper>(std::move(e));
+      interrupt_ = std::make_unique<exception_wrapper>(std::move(e));
       if (interruptHandler_) {
         interruptHandler_(*interrupt_);
       }
@@ -282,44 +281,25 @@ class Core final {
   }
 
  private:
-  class CountedReference {
+  // Helper class that stores a pointer to the `Core` object and calls
+  // `derefCallback` and `detachOne` in the destructor.
+  class CoreAndCallbackReference {
    public:
-    ~CountedReference() {
+    explicit CoreAndCallbackReference(Core* core) noexcept : core_(core) {}
+
+    ~CoreAndCallbackReference() {
       if (core_) {
+        core_->derefCallback();
         core_->detachOne();
-        core_ = nullptr;
       }
     }
 
-    explicit CountedReference(Core* core) noexcept : core_(core) {
-      // do not construct a CountedReference from nullptr!
-      DCHECK(core);
+    CoreAndCallbackReference(CoreAndCallbackReference const& o) = delete;
+    CoreAndCallbackReference& operator=(CoreAndCallbackReference const& o) =
+        delete;
 
-      ++core_->attached_;
-    }
-
-    // CountedReference must be copy-constructable as long as
-    // folly::Executor::add takes a std::function
-    CountedReference(CountedReference const& o) noexcept : core_(o.core_) {
-      if (core_) {
-        ++core_->attached_;
-      }
-    }
-
-    CountedReference& operator=(CountedReference const& o) noexcept {
-      ~CountedReference();
-      new (this) CountedReference(o);
-      return *this;
-    }
-
-    CountedReference(CountedReference&& o) noexcept {
+    CoreAndCallbackReference(CoreAndCallbackReference&& o) noexcept {
       std::swap(core_, o.core_);
-    }
-
-    CountedReference& operator=(CountedReference&& o) noexcept {
-      ~CountedReference();
-      new (this) CountedReference(std::move(o));
-      return *this;
     }
 
     Core* getCore() const noexcept {
@@ -345,7 +325,8 @@ class Core final {
 
   void doCallback() {
     Executor* x = executor_;
-    int8_t priority;
+    // initialize, solely to appease clang's -Wconditional-uninitialized
+    int8_t priority = 0;
     if (x) {
       if (!executorLock_.try_lock()) {
         executorLock_.lock();
@@ -357,23 +338,36 @@ class Core final {
 
     if (x) {
       exception_wrapper ew;
+      // We need to reset `callback_` after it was executed (which can happen
+      // through the executor or, if `Executor::add` throws, below). The
+      // executor might discard the function without executing it (now or
+      // later), in which case `callback_` also needs to be reset.
+      // The `Core` has to be kept alive throughout that time, too. Hence we
+      // increment `attached_` and `callbackReferences_` by two, and construct
+      // exactly two `CoreAndCallbackReference` objects, which call
+      // `derefCallback` and `detachOne` in their destructor. One will guard
+      // this scope, the other one will guard the lambda passed to the executor.
+      attached_ += 2;
+      callbackReferences_ += 2;
+      CoreAndCallbackReference guard_local_scope(this);
+      CoreAndCallbackReference guard_lambda(this);
       try {
         if (LIKELY(x->getNumPriorities() == 1)) {
-          x->add([core_ref = CountedReference(this)]() mutable {
+          x->add([core_ref = std::move(guard_lambda)]() mutable {
             auto cr = std::move(core_ref);
             Core* const core = cr.getCore();
             RequestContextScopeGuard rctx(core->context_);
-            SCOPE_EXIT { core->callback_ = {}; };
             core->callback_(std::move(*core->result_));
           });
         } else {
-          x->addWithPriority([core_ref = CountedReference(this)]() mutable {
-            auto cr = std::move(core_ref);
-            Core* const core = cr.getCore();
-            RequestContextScopeGuard rctx(core->context_);
-            SCOPE_EXIT { core->callback_ = {}; };
-            core->callback_(std::move(*core->result_));
-          }, priority);
+          x->addWithPriority(
+              [core_ref = std::move(guard_lambda)]() mutable {
+                auto cr = std::move(core_ref);
+                Core* const core = cr.getCore();
+                RequestContextScopeGuard rctx(core->context_);
+                core->callback_(std::move(*core->result_));
+              },
+              priority);
         }
       } catch (const std::exception& e) {
         ew = exception_wrapper(std::current_exception(), e);
@@ -381,16 +375,17 @@ class Core final {
         ew = exception_wrapper(std::current_exception());
       }
       if (ew) {
-        CountedReference core_ref(this);
         RequestContextScopeGuard rctx(context_);
         result_ = Try<T>(std::move(ew));
-        SCOPE_EXIT { callback_ = {}; };
         callback_(std::move(*result_));
       }
     } else {
-      CountedReference core_ref(this);
+      attached_++;
+      SCOPE_EXIT {
+        callback_ = {};
+        detachOne();
+      };
       RequestContextScopeGuard rctx(context_);
-      SCOPE_EXIT { callback_ = {}; };
       callback_(std::move(*result_));
     }
   }
@@ -403,6 +398,11 @@ class Core final {
     }
   }
 
+  void derefCallback() {
+    if (--callbackReferences_ == 0) {
+      callback_ = {};
+    }
+  }
 
   folly::Function<void(Try<T>&&)> callback_;
   // place result_ next to increase the likelihood that the value will be
@@ -410,6 +410,7 @@ class Core final {
   folly::Optional<Try<T>> result_;
   FSM<State> fsm_;
   std::atomic<unsigned char> attached_;
+  std::atomic<unsigned char> callbackReferences_{0};
   std::atomic<bool> active_ {true};
   std::atomic<bool> interruptHandlerSet_ {false};
   folly::MicroSpinLock interruptLock_ {0};
@@ -421,45 +422,6 @@ class Core final {
   std::function<void(exception_wrapper const&)> interruptHandler_ {nullptr};
 };
 
-template <typename... Ts>
-struct CollectAllVariadicContext {
-  CollectAllVariadicContext() {}
-  template <typename T, size_t I>
-  inline void setPartialResult(Try<T>& t) {
-    std::get<I>(results) = std::move(t);
-  }
-  ~CollectAllVariadicContext() {
-    p.setValue(std::move(results));
-  }
-  Promise<std::tuple<Try<Ts>...>> p;
-  std::tuple<Try<Ts>...> results;
-  typedef Future<std::tuple<Try<Ts>...>> type;
-};
-
-template <typename... Ts>
-struct CollectVariadicContext {
-  CollectVariadicContext() {}
-  template <typename T, size_t I>
-  inline void setPartialResult(Try<T>& t) {
-    if (t.hasException()) {
-       if (!threw.exchange(true)) {
-         p.setException(std::move(t.exception()));
-       }
-     } else if (!threw) {
-       std::get<I>(results) = std::move(t);
-     }
-  }
-  ~CollectVariadicContext() noexcept {
-    if (!threw.exchange(true)) {
-      p.setValue(unwrapTryTuple(std::move(results)));
-    }
-  }
-  Promise<std::tuple<Ts...>> p;
-  std::tuple<folly::Try<Ts>...> results;
-  std::atomic<bool> threw {false};
-  typedef Future<std::tuple<Ts...>> type;
-};
-
 template <template <typename...> class T, typename... Ts>
 void collectVariadicHelper(const std::shared_ptr<T<Ts...>>& /* ctx */) {
   // base case
@@ -469,9 +431,11 @@ template <template <typename ...> class T, typename... Ts,
           typename THead, typename... TTail>
 void collectVariadicHelper(const std::shared_ptr<T<Ts...>>& ctx,
                            THead&& head, TTail&&... tail) {
-  head.setCallback_([ctx](Try<typename THead::value_type>&& t) {
-    ctx->template setPartialResult<typename THead::value_type,
-                                   sizeof...(Ts) - sizeof...(TTail) - 1>(t);
+  using ValueType = typename std::decay<THead>::type::value_type;
+  std::forward<THead>(head).setCallback_([ctx](Try<ValueType>&& t) {
+    ctx->template setPartialResult<
+        ValueType,
+        sizeof...(Ts) - sizeof...(TTail)-1>(t);
   });
   // template tail-recursion
   collectVariadicHelper(ctx, std::forward<TTail>(tail)...);

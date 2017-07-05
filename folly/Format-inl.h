@@ -31,8 +31,8 @@
 #include <folly/portability/Windows.h>
 
 // Ignore -Wformat-nonliteral warnings within this file
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+FOLLY_PUSH_WARNING
+FOLLY_GCC_DISABLE_WARNING("-Wformat-nonliteral")
 
 namespace folly {
 
@@ -157,9 +157,7 @@ template <class Derived, bool containerMode, class... Args>
 BaseFormatter<Derived, containerMode, Args...>::BaseFormatter(
     StringPiece str,
     Args&&... args)
-    : str_(str),
-      values_(FormatValue<typename std::decay<Args>::type>(
-          std::forward<Args>(args))...) {}
+    : str_(str), values_(std::forward<Args>(args)...) {}
 
 template <class Derived, bool containerMode, class... Args>
 template <class Output>
@@ -298,13 +296,9 @@ void formatString(StringPiece val, FormatArg& arg, FormatCallback& cb) {
     throw BadFormatArg("folly::format: invalid precision");
   }
 
-  // XXX: clang should be smart enough to not need the two static_cast<size_t>
-  // uses below given the above checks. If clang ever becomes that smart, we
-  // should remove the otherwise unnecessary warts.
-
   if (arg.precision != FormatArg::kDefaultPrecision &&
       val.size() > static_cast<size_t>(arg.precision)) {
-    val.reset(val.data(), size_t(arg.precision));
+    val.reset(val.data(), static_cast<size_t>(arg.precision));
   }
 
   constexpr int padBufSize = 128;
@@ -684,7 +678,7 @@ class FormatValue<float> {
   float val_;
 };
 
-// Sring-y types (implicitly convertible to StringPiece, except char*)
+// String-y types (implicitly convertible to StringPiece, except char*)
 template <class T>
 class FormatValue<
     T,
@@ -1127,4 +1121,4 @@ typename std::enable_if<IsSomeString<Tgt>::value>::type toAppend(
 
 } // namespace folly
 
-#pragma GCC diagnostic pop
+FOLLY_POP_WARNING

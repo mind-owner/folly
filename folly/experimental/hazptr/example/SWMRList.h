@@ -56,12 +56,12 @@ class SWMRListSet {
   hazptr_domain& domain_;
 
   /* Used by the single writer */
-  void locate_lower_bound(const T v, std::atomic<Node*>*& prev) const {
-    auto curr = prev->load();
+  void locate_lower_bound(const T& v, std::atomic<Node*>*& prev) const {
+    auto curr = prev->load(std::memory_order_relaxed);
     while (curr) {
       if (curr->elem_ >= v) break;
       prev = &(curr->next_);
-      curr = curr->next_.load();
+      curr = curr->next_.load(std::memory_order_relaxed);
     }
     return;
   }
@@ -78,42 +78,48 @@ class SWMRListSet {
     }
   }
 
-  bool add(const T v) {
+  bool add(T v) {
     auto prev = &head_;
     locate_lower_bound(v, prev);
-    auto curr = prev->load();
+    auto curr = prev->load(std::memory_order_relaxed);
     if (curr && curr->elem_ == v) return false;
-    prev->store(new Node(v, curr));
+    prev->store(new Node(std::move(v), curr));
     return true;
   }
 
-  bool remove(const T v) {
+  bool remove(const T& v) {
     auto prev = &head_;
     locate_lower_bound(v, prev);
-    auto curr = prev->load();
+    auto curr = prev->load(std::memory_order_relaxed);
     if (!curr || curr->elem_ != v) return false;
-    prev->store(curr->next_.load());
+    Node *curr_next = curr->next_.load();
+    // Patch up the actual list...
+    prev->store(curr_next, std::memory_order_release);
+    // ...and only then null out the removed node.
+    curr->next_.store(nullptr, std::memory_order_release);
     curr->retire(domain_);
     return true;
   }
   /* Used by readers */
-  bool contains(const T val) const {
+  bool contains(const T& val) const {
     /* Acquire two hazard pointers for hand-over-hand traversal. */
-    hazptr_owner<Node> hptr_prev(domain_);
-    hazptr_owner<Node> hptr_curr(domain_);
-    T elem;
-    bool done = false;
-    while (!done) {
+    hazptr_holder hptr_prev(domain_);
+    hazptr_holder hptr_curr(domain_);
+    while (true) {
       auto prev = &head_;
-      auto curr = prev->load();
+      auto curr = prev->load(std::memory_order_acquire);
       while (true) {
-        if (!curr) { done = true; break; }
+        if (!curr) { return false; }
         if (!hptr_curr.try_protect(curr, *prev))
           break;
-        auto next = curr->next_.load();
-        elem = curr->elem_;
-        if (prev->load() != curr) break;
-        if (elem >= val) { done = true; break; }
+        auto next = curr->next_.load(std::memory_order_acquire);
+        if (prev->load(std::memory_order_acquire) != curr)
+          break;
+        if (curr->elem_ == val) {
+            return true;
+        } else if (!(curr->elem_ < val)) {
+            return false;  // because the list is sorted
+        }
         prev = &(curr->next_);
         curr = next;
         /* Swap does not change the values of the owned hazard
@@ -129,7 +135,6 @@ class SWMRListSet {
         swap(hptr_curr, hptr_prev);
       }
     }
-    return elem == val;
     /* The hazard pointers are released automatically. */
   }
 };

@@ -45,7 +45,7 @@
 // includes and uses fbstring.
 #if defined(_GLIBCXX_USE_FB) && !defined(_LIBSTDCXX_FBSTRING)
 
-#include <folly/detail/Malloc.h>
+#include <folly/detail/MallocImpl.h>
 #include <folly/portability/BitsFunctexcept.h>
 
 #include <string>
@@ -67,7 +67,7 @@ namespace folly {
 
 /**
  * Declare *allocx() and mallctl*() as weak symbols. These will be provided by
- * jemalloc if we are using jemalloc, or will be NULL if we are using another
+ * jemalloc if we are using jemalloc, or will be nullptr if we are using another
  * malloc implementation.
  */
 extern "C" void* mallocx(size_t, int)
@@ -98,7 +98,7 @@ __attribute__((__weak__));
 
 #else // !defined(_LIBSTDCXX_FBSTRING)
 
-#include <folly/detail/Malloc.h> /* nolint */
+#include <folly/detail/MallocImpl.h> /* nolint */
 #include <folly/portability/BitsFunctexcept.h> /* nolint */
 
 #endif
@@ -148,9 +148,9 @@ namespace folly {
  * Determine if we are using jemalloc or not.
  */
 FOLLY_MALLOC_NOINLINE inline bool usingJEMalloc() noexcept {
-  // Checking for rallocx != NULL is not sufficient; we may be in a dlopen()ed
-  // module that depends on libjemalloc, so rallocx is resolved, but the main
-  // program might be using a different memory allocator.
+  // Checking for rallocx != nullptr is not sufficient; we may be in a
+  // dlopen()ed module that depends on libjemalloc, so rallocx is resolved, but
+  // the main program might be using a different memory allocator.
   // How do we determine that we're using jemalloc? In the hackiest
   // way possible. We allocate memory using malloc() and see if the
   // per-thread counter of allocated memory increases. This makes me

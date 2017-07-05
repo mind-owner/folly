@@ -21,7 +21,6 @@
 #include <iostream>
 #include <limits.h>
 #include <link.h>
-#include <unistd.h>
 
 #ifdef __GNUC__
 #include <ext/stdio_filebuf.h>
@@ -34,10 +33,10 @@
 #include <folly/ScopeGuard.h>
 #include <folly/String.h>
 
-#include <folly/experimental/symbolizer/Elf.h>
 #include <folly/experimental/symbolizer/Dwarf.h>
+#include <folly/experimental/symbolizer/Elf.h>
 #include <folly/experimental/symbolizer/LineReader.h>
-
+#include <folly/portability/Unistd.h>
 
 /*
  * This is declared in `link.h' on Linux platforms, but apparently not on the
@@ -385,7 +384,7 @@ StackTracePrinter::StackTracePrinter(size_t minSignalSafeElfCacheSize, int fd)
           fd,
           SymbolizePrinter::COLOR_IF_TTY,
           size_t(64) << 10), // 64KiB
-      addresses_(make_unique<FrameArray<kMaxStackTraceDepth>>()) {}
+      addresses_(std::make_unique<FrameArray<kMaxStackTraceDepth>>()) {}
 
 void StackTracePrinter::flush() {
   printer_.flush();

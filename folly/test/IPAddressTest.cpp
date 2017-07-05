@@ -405,6 +405,28 @@ TEST(IPAddress, ToString) {
                               " - ", addr_1, " - ", addr_10_1_2_3));
 }
 
+TEST(IPaddress, toInverseArpaName) {
+  IPAddressV4 addr_ipv4("10.0.0.1");
+  EXPECT_EQ("1.0.0.10.in-addr.arpa", addr_ipv4.toInverseArpaName());
+  IPAddressV6 addr_ipv6("2620:0000:1cfe:face:b00c:0000:0000:0003");
+  EXPECT_EQ(
+      sformat(
+          "{}.ip6.arpa",
+          "3.0.0.0.0.0.0.0.0.0.0.0.c.0.0.b.e.c.a.f.e.f.c.1.0.0.0.0.0.2.6.2"),
+      addr_ipv6.toInverseArpaName());
+}
+
+TEST(IPaddress, fromInverseArpaName) {
+  EXPECT_EQ(
+      IPAddressV4("10.0.0.1"),
+      IPAddressV4::fromInverseArpaName("1.0.0.10.in-addr.arpa"));
+  EXPECT_EQ(
+      IPAddressV6("2620:0000:1cfe:face:b00c:0000:0000:0003"),
+      IPAddressV6::fromInverseArpaName(sformat(
+          "{}.ip6.arpa",
+          "3.0.0.0.0.0.0.0.0.0.0.0.c.0.0.b.e.c.a.f.e.f.c.1.0.0.0.0.0.2.6.2")));
+}
+
 // Test that invalid string values are killed
 TEST_P(IPAddressCtorTest, InvalidCreation) {
   string addr = GetParam();
@@ -439,9 +461,26 @@ TEST(IPAddress, ToFullyQualifiedLocal) {
   EXPECT_EQ("0000:0000:0000:0000:0000:0000:0000:0001", ip.toFullyQualified())
       << ip;
 }
-TEST(IPAddress, ToFullyQualifiedSize) {
+TEST(IPAddress, ToFullyQualifiedAppendV6) {
+  IPAddress ip("2620:0:1cfe:face:b00c::3");
+  std::string result;
+  ip.toFullyQualifiedAppend(result);
+  EXPECT_EQ("2620:0000:1cfe:face:b00c:0000:0000:0003", result) << ip;
+}
+TEST(IPAddress, ToFullyQualifiedAppendV4) {
+  IPAddress ip("127.0.0.1");
+  std::string result;
+  ip.toFullyQualifiedAppend(result);
+  EXPECT_EQ("127.0.0.1", result) << ip;
+}
+TEST(IPAddress, ToFullyQualifiedSizeV6) {
   auto actual = IPAddressV6::kToFullyQualifiedSize;
   auto expected = IPAddress("::").toFullyQualified().size();
+  EXPECT_EQ(expected, actual);
+}
+TEST(IPAddress, MaxToFullyQualifiedSizeV4) {
+  auto actual = IPAddressV4::kMaxToFullyQualifiedSize;
+  auto expected = IPAddress("255.255.255.255").toFullyQualified().size();
   EXPECT_EQ(expected, actual);
 }
 

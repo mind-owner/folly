@@ -27,6 +27,8 @@
 #include <type_traits>
 #include <utility>
 
+#include <folly/concurrency/CacheLocality.h>
+
 namespace folly {
 
 /*
@@ -62,12 +64,12 @@ struct ProducerConsumerQueue {
     // (No real synchronization needed at destructor time: only one
     // thread can be doing this.)
     if (!std::is_trivially_destructible<T>::value) {
-      size_t read = readIndex_;
-      size_t end = writeIndex_;
-      while (read != end) {
-        records_[read].~T();
-        if (++read == size_) {
-          read = 0;
+      size_t readIndex = readIndex_;
+      size_t endIndex = writeIndex_;
+      while (readIndex != endIndex) {
+        records_[readIndex].~T();
+        if (++readIndex == size_) {
+          readIndex = 0;
         }
       }
     }
@@ -166,11 +168,14 @@ struct ProducerConsumerQueue {
   }
 
 private:
-  const uint32_t size_;
-  T* const records_;
+ char pad0_[CacheLocality::kFalseSharingRange];
+ const uint32_t size_;
+ T* const records_;
 
-  std::atomic<unsigned int> readIndex_;
-  std::atomic<unsigned int> writeIndex_;
+ FOLLY_ALIGN_TO_AVOID_FALSE_SHARING std::atomic<unsigned int> readIndex_;
+ FOLLY_ALIGN_TO_AVOID_FALSE_SHARING std::atomic<unsigned int> writeIndex_;
+
+ char pad1_[CacheLocality::kFalseSharingRange - sizeof(writeIndex_)];
 };
 
 }

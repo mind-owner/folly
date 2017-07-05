@@ -1097,6 +1097,44 @@ TEST(AsyncSocketTest, WritePipeError) {
 }
 
 /**
+ * Test writing to a socket that has its read side closed
+ */
+TEST(AsyncSocketTest, WriteAfterReadEOF) {
+  TestServer server;
+
+  // connect()
+  EventBase evb;
+  std::shared_ptr<AsyncSocket> socket =
+      AsyncSocket::newSocket(&evb, server.getAddress(), 30);
+  evb.loop(); // loop until the socket is connected
+
+  // Accept the connection
+  std::shared_ptr<AsyncSocket> acceptedSocket = server.acceptAsync(&evb);
+  ReadCallback rcb;
+  acceptedSocket->setReadCB(&rcb);
+
+  // Shutdown the write side of client socket (read side of server socket)
+  socket->shutdownWrite();
+  evb.loop();
+
+  // Check that accepted socket is still writable
+  ASSERT_FALSE(acceptedSocket->good());
+  ASSERT_TRUE(acceptedSocket->writable());
+
+  // Write data to accepted socket
+  constexpr size_t simpleBufLength = 5;
+  char simpleBuf[simpleBufLength];
+  memset(simpleBuf, 'a', simpleBufLength);
+  WriteCallback wcb;
+  acceptedSocket->write(&wcb, simpleBuf, simpleBufLength);
+  evb.loop();
+
+  // Make sure we were able to write even after getting a read EOF
+  ASSERT_EQ(rcb.state, STATE_SUCCEEDED); // this indicates EOF
+  ASSERT_EQ(wcb.state, STATE_SUCCEEDED);
+}
+
+/**
  * Test that bytes written is correctly computed in case of write failure
  */
 TEST(AsyncSocketTest, WriteErrorCallbackBytesWritten) {
@@ -2806,7 +2844,7 @@ class MockEvbChangeCallback : public AsyncSocket::EvbChangeCallback {
 };
 
 TEST(AsyncSocketTest, EvbCallbacks) {
-  auto cb = folly::make_unique<MockEvbChangeCallback>();
+  auto cb = std::make_unique<MockEvbChangeCallback>();
   EventBase evb;
   std::shared_ptr<AsyncSocket> socket = AsyncSocket::newSocket(&evb);
 
@@ -2829,6 +2867,7 @@ enum SOF_TIMESTAMPING {
   SOF_TIMESTAMPING_OPT_CMSG = (1 << 10),
   SOF_TIMESTAMPING_OPT_TSONLY = (1 << 11),
 };
+
 TEST(AsyncSocketTest, ErrMessageCallback) {
   TestServer server;
 
@@ -2857,6 +2896,9 @@ TEST(AsyncSocketTest, ErrMessageCallback) {
   ASSERT_EQ(socket->getErrMessageCallback(),
             static_cast<folly::AsyncSocket::ErrMessageCallback*>(&errMsgCB));
 
+  errMsgCB.socket_ = socket.get();
+  errMsgCB.resetAfter_ = 3;
+
   // Enable timestamp notifications
   ASSERT_GT(socket->getFd(), 0);
   int flags = SOF_TIMESTAMPING_OPT_ID
@@ -2870,7 +2912,9 @@ TEST(AsyncSocketTest, ErrMessageCallback) {
   // write()
   std::vector<uint8_t> wbuf(128, 'a');
   WriteCallback wcb;
-  socket->write(&wcb, wbuf.data(), wbuf.size());
+  // Send two packets to get two EOM notifications
+  socket->write(&wcb, wbuf.data(), wbuf.size() / 2);
+  socket->write(&wcb, wbuf.data() + wbuf.size() / 2, wbuf.size() / 2);
 
   // Accept the connection.
   std::shared_ptr<BlockingSocket> acceptedSocket = server.accept();
@@ -2895,8 +2939,10 @@ TEST(AsyncSocketTest, ErrMessageCallback) {
 
   // Check for the timestamp notifications.
   ASSERT_EQ(errMsgCB.exception_.type_, folly::AsyncSocketException::UNKNOWN);
-  ASSERT_TRUE(errMsgCB.gotByteSeq_);
-  ASSERT_TRUE(errMsgCB.gotTimestamp_);
+  ASSERT_GT(errMsgCB.gotByteSeq_, 0);
+  ASSERT_GT(errMsgCB.gotTimestamp_, 0);
+  ASSERT_EQ(
+      errMsgCB.gotByteSeq_ + errMsgCB.gotTimestamp_, errMsgCB.resetAfter_);
 }
 #endif // MSG_ERRQUEUE
 
@@ -3085,41 +3131,29 @@ TEST(AsyncSocketTest, SendMessageFlags) {
 }
 
 TEST(AsyncSocketTest, SendMessageAncillaryData) {
-  struct sockaddr_un addr = {AF_UNIX,
-                             "AsyncSocketTest.SendMessageAncillaryData\0"};
+  int fds[2];
+  EXPECT_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
 
-  // Clean up the name in the name space we're going to use
-  ASSERT_FALSE(remove(addr.sun_path) == -1 && errno != ENOENT);
+  // "Client" socket
+  int cfd = fds[0];
+  ASSERT_NE(cfd, -1);
 
-  // Set up listening socket
-  int lfd = fsp::socket(AF_UNIX, SOCK_STREAM, 0);
-  ASSERT_NE(lfd, -1);
-  ASSERT_NE(bind(lfd, (struct sockaddr*)&addr, sizeof(addr)), -1)
-      << "Bind failed: " << errno;
-
-  // Create the connecting socket
-  int csd = fsp::socket(AF_UNIX, SOCK_STREAM, 0);
-  ASSERT_NE(csd, -1);
-
-  // Listen for incoming connect
-  ASSERT_NE(listen(lfd, 5), -1);
-
-  // Connect to the listening socket
-  ASSERT_NE(fsp::connect(csd, (struct sockaddr*)&addr, sizeof(addr)), -1)
-      << "Connect request failed: " << errno;
-
-  // Accept the connection
-  int sfd = accept(lfd, nullptr, nullptr);
+  // "Server" socket
+  int sfd = fds[1];
   ASSERT_NE(sfd, -1);
+  SCOPE_EXIT { close(sfd); };
 
   // Instantiate AsyncSocket object for the connected socket
   EventBase evb;
-  std::shared_ptr<AsyncSocket> socket = AsyncSocket::newSocket(&evb, csd);
+  std::shared_ptr<AsyncSocket> socket = AsyncSocket::newSocket(&evb, cfd);
 
   // Open a temporary file and write a magic string to it
   // We'll transfer the file handle to test the message parameters
   // callback logic.
-  int tmpfd = open("/var/tmp", O_RDWR | O_TMPFILE);
+  TemporaryFile file(StringPiece(),
+                     fs::path(),
+                     TemporaryFile::Scope::UNLINK_IMMEDIATELY);
+  int tmpfd = file.fd();
   ASSERT_NE(tmpfd, -1) << "Failed to open a temporary file";
   std::string magicString("Magic string");
   ASSERT_EQ(write(tmpfd, magicString.c_str(), magicString.length()),
@@ -3178,6 +3212,7 @@ TEST(AsyncSocketTest, SendMessageAncillaryData) {
   int fd = 0;
   memcpy(&fd, CMSG_DATA(&r_u.cmh), sizeof(int));
   ASSERT_NE(fd, 0);
+  SCOPE_EXIT { close(fd); };
 
   std::vector<uint8_t> transferredMagicString(magicString.length() + 1, 0);
 

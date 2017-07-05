@@ -29,13 +29,14 @@
 #include <boost/iterator/iterator_facade.hpp>
 
 #include <folly/FBString.h>
-#include <folly/Range.h>
 #include <folly/FBVector.h>
+#include <folly/Portability.h>
+#include <folly/Range.h>
 #include <folly/portability/SysUio.h>
 
 // Ignore shadowing warnings within this file, so includers can use -Wshadow.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wshadow"
+FOLLY_PUSH_WARNING
+FOLLY_GCC_DISABLE_WARNING("-Wshadow")
 
 namespace folly {
 
@@ -1124,6 +1125,26 @@ class IOBuf {
   IOBuf cloneOneAsValue() const;
 
   /**
+   * Return a new unchained IOBuf that may share the same data as this chain.
+   *
+   * If the IOBuf chain is not chained then the new IOBuf will point to the same
+   * underlying data buffer as the original chain. Otherwise, it will clone and
+   * coalesce the IOBuf chain.
+   *
+   * The new IOBuf will have at least as much headroom as the first IOBuf in the
+   * chain, and at least as much tailroom as the last IOBuf in the chain.
+   *
+   * Throws std::bad_alloc on error.
+   */
+  std::unique_ptr<IOBuf> cloneCoalesced() const;
+
+  /**
+   * Similar to cloneCoalesced(). But returns IOBuf by value rather than
+   * heap-allocating it.
+   */
+  IOBuf cloneCoalescedAsValue() const;
+
+  /**
    * Similar to Clone(). But use other as the head node. Other nodes in the
    * chain (if any) will be allocted on heap.
    */
@@ -1376,7 +1397,7 @@ class IOBuf {
     typedef typename UniquePtr::deleter_type Deleter;
 
     explicit UniquePtrDeleter(Deleter deleter) : deleter_(std::move(deleter)){ }
-    void dispose(void* p) {
+    void dispose(void* p) override {
       try {
         deleter_(static_cast<Pointer>(p));
         delete this;
@@ -1524,4 +1545,4 @@ inline IOBuf::Iterator IOBuf::end() const { return cend(); }
 
 } // folly
 
-#pragma GCC diagnostic pop
+FOLLY_POP_WARNING

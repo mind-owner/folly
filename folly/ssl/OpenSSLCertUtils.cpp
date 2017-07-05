@@ -14,13 +14,10 @@
  * limitations under the License.
  */
 #include <folly/ssl/OpenSSLCertUtils.h>
-#include <folly/String.h>
-#include <folly/io/async/ssl/OpenSSLPtrTypes.h>
-
-#include <openssl/x509.h>
-#include <openssl/x509v3.h>
 
 #include <folly/ScopeGuard.h>
+#include <folly/String.h>
+#include <folly/ssl/OpenSSLPtrTypes.h>
 
 namespace folly {
 namespace ssl {
@@ -46,7 +43,7 @@ Optional<std::string> OpenSSLCertUtils::getCommonName(X509& x509) {
     return none;
   }
 
-  auto cnData = reinterpret_cast<const char*>(ASN1_STRING_data(cnAsn));
+  auto cnData = reinterpret_cast<const char*>(ASN1_STRING_get0_data(cnAsn));
   auto cnLen = ASN1_STRING_length(cnAsn);
   if (!cnData || cnLen <= 0) {
     return none;
@@ -72,8 +69,8 @@ std::vector<std::string> OpenSSLCertUtils::getSubjectAltNames(X509& x509) {
     if (!genName || genName->type != GEN_DNS) {
       continue;
     }
-    auto nameData =
-        reinterpret_cast<const char*>(ASN1_STRING_data(genName->d.dNSName));
+    auto nameData = reinterpret_cast<const char*>(
+        ASN1_STRING_get0_data(genName->d.dNSName));
     auto nameLen = ASN1_STRING_length(genName->d.dNSName);
     if (!nameData || nameLen <= 0) {
       continue;
@@ -162,8 +159,6 @@ std::string OpenSSLCertUtils::getDateTimeStr(const ASN1_TIME* time) {
     return "";
   }
 
-  std::array<char, 32> buf;
-
   auto bio = BioUniquePtr(BIO_new(BIO_s_mem()));
   if (bio == nullptr) {
     throw std::runtime_error("Cannot allocate bio");
@@ -178,5 +173,28 @@ std::string OpenSSLCertUtils::getDateTimeStr(const ASN1_TIME* time) {
   return std::string(bioData, bioLen);
 }
 
+X509UniquePtr OpenSSLCertUtils::derDecode(ByteRange range) {
+  auto begin = range.data();
+  X509UniquePtr cert(d2i_X509(nullptr, &begin, range.size()));
+  if (!cert) {
+    throw std::runtime_error("could not read cert");
+  }
+  return cert;
+}
+
+std::unique_ptr<IOBuf> OpenSSLCertUtils::derEncode(X509& x509) {
+  auto len = i2d_X509(&x509, nullptr);
+  if (len < 0) {
+    throw std::runtime_error("Error computing length");
+  }
+  auto buf = IOBuf::create(len);
+  auto dataPtr = buf->writableData();
+  len = i2d_X509(&x509, &dataPtr);
+  if (len < 0) {
+    throw std::runtime_error("Error converting cert to DER");
+  }
+  buf->append(len);
+  return buf;
+}
 } // ssl
 } // folly

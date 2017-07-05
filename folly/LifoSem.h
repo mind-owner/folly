@@ -27,7 +27,7 @@
 #include <folly/Baton.h>
 #include <folly/IndexedMemPool.h>
 #include <folly/Likely.h>
-#include <folly/detail/CacheLocality.h>
+#include <folly/concurrency/CacheLocality.h>
 
 namespace folly {
 
@@ -91,7 +91,7 @@ typedef LifoSemImpl<> LifoSem;
 /// The exception thrown when wait()ing on an isShutdown() LifoSem
 struct ShutdownSemError : public std::runtime_error {
   explicit ShutdownSemError(const std::string& msg);
-  virtual ~ShutdownSemError() noexcept;
+  ~ShutdownSemError() noexcept override;
 };
 
 namespace detail {
@@ -515,9 +515,7 @@ struct LifoSemBase {
   FOLLY_ALIGN_TO_AVOID_FALSE_SHARING
   folly::AtomicStruct<LifoSemHead,Atom> head_;
 
-  char padding_[folly::detail::CacheLocality::kFalseSharingRange -
-      sizeof(LifoSemHead)];
-
+  char padding_[folly::CacheLocality::kFalseSharingRange - sizeof(LifoSemHead)];
 
   static LifoSemNode<Handoff, Atom>& idxToNode(uint32_t idx) {
     auto raw = &LifoSemRawNode<Atom>::pool()[idx];

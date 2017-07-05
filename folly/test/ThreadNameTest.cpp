@@ -24,26 +24,20 @@
 using namespace std;
 using namespace folly;
 
-static constexpr bool expectedSetOtherThreadNameResult =
-#ifdef FOLLY_HAS_PTHREAD_SETNAME_NP_THREAD_NAME
-    true
-#else
-    false // This system has no known way to set the name of another thread
-#endif
-    ;
+namespace {
 
-static constexpr bool expectedSetSelfThreadNameResult =
-#if defined(FOLLY_HAS_PTHREAD_SETNAME_NP_THREAD_NAME) || \
-    defined(FOLLY_HAS_PTHREAD_SETNAME_NP_NAME)
-    true
-#else
-    false // This system has no known way to set its own thread name
-#endif
-    ;
+const bool expectedSetOtherThreadNameResult = folly::canSetOtherThreadName();
+const bool expectedSetSelfThreadNameResult = folly::canSetCurrentThreadName();
+constexpr StringPiece kThreadName{"rockin-thread"};
 
-TEST(ThreadName, setThreadName_self) {
+} // namespace
+
+TEST(ThreadName, getCurrentThreadName) {
   thread th([] {
-    EXPECT_EQ(expectedSetSelfThreadNameResult, setThreadName("rockin-thread"));
+    EXPECT_EQ(expectedSetSelfThreadNameResult, setThreadName(kThreadName));
+    if (expectedSetSelfThreadNameResult) {
+      EXPECT_EQ(kThreadName.toString(), *getCurrentThreadName());
+    }
   });
   SCOPE_EXIT { th.join(); };
 }
@@ -61,19 +55,7 @@ TEST(ThreadName, setThreadName_other_pthread) {
   handle_set.wait();
   SCOPE_EXIT { let_thread_end.post(); };
   EXPECT_EQ(
-      expectedSetOtherThreadNameResult, setThreadName(handle, "rockin-thread"));
-}
-
-TEST(ThreadName, setThreadName_other_native) {
-  Baton<> let_thread_end;
-  thread th([&] {
-      let_thread_end.wait();
-  });
-  SCOPE_EXIT { th.join(); };
-  SCOPE_EXIT { let_thread_end.post(); };
-  EXPECT_EQ(
-      expectedSetOtherThreadNameResult,
-      setThreadName(th.native_handle(), "rockin-thread"));
+      expectedSetOtherThreadNameResult, setThreadName(handle, kThreadName));
 }
 
 TEST(ThreadName, setThreadName_other_id) {
@@ -85,5 +67,8 @@ TEST(ThreadName, setThreadName_other_id) {
   SCOPE_EXIT { let_thread_end.post(); };
   EXPECT_EQ(
       expectedSetOtherThreadNameResult,
-      setThreadName(th.get_id(), "rockin-thread"));
+      setThreadName(th.get_id(), kThreadName));
+  if (expectedSetOtherThreadNameResult) {
+    EXPECT_EQ(*getThreadName(th.get_id()), kThreadName);
+  }
 }

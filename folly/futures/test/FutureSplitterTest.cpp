@@ -108,7 +108,7 @@ TEST(FutureSplitter, splitFutureMoveAssignable) {
 
 TEST(FutureSplitter, splitFutureScope) {
   Promise<int> p;
-  auto pSP = make_unique<FutureSplitter<int>>(p.getFuture());
+  auto pSP = std::make_unique<FutureSplitter<int>>(p.getFuture());
   auto f1 = pSP->getFuture();
   EXPECT_FALSE(f1.isReady());
   pSP.reset();
@@ -126,8 +126,8 @@ TEST(FutureSplitter, splitFutureFailure) {
   EXPECT_FALSE(f1.isReady());
   try {
     throw std::runtime_error("Oops");
-  } catch (...) {
-    p.setException(exception_wrapper(std::current_exception()));
+  } catch (std::exception& e) {
+    p.setException(exception_wrapper(std::current_exception(), e));
   }
   EXPECT_TRUE(f1.isReady());
   EXPECT_TRUE(f1.hasException());

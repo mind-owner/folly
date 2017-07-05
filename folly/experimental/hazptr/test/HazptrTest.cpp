@@ -13,6 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#define HAZPTR_DEBUG true
+#define HAZPTR_STATS true
+#define HAZPTR_SCAN_THRESHOLD 10
+
 #include <folly/experimental/hazptr/test/HazptrUse1.h>
 #include <folly/experimental/hazptr/test/HazptrUse2.h>
 #include <folly/experimental/hazptr/example/LockFreeLIFO.h>
@@ -21,12 +25,12 @@
 #include <folly/experimental/hazptr/debug.h>
 #include <folly/experimental/hazptr/hazptr.h>
 
-#include <gflags/gflags.h>
+#include <folly/portability/GFlags.h>
 #include <folly/portability/GTest.h>
 
 #include <thread>
 
-DEFINE_int32(num_threads, 1, "Number of threads");
+DEFINE_int32(num_threads, 5, "Number of threads");
 DEFINE_int64(num_reps, 1, "Number of test reps");
 DEFINE_int64(num_ops, 10, "Number of ops or pairs of ops per rep");
 
@@ -70,13 +74,13 @@ TEST_F(HazptrTest, Test1) {
   DEBUG_PRINT("");
 
   DEBUG_PRINT("=== hptr0");
-  hazptr_owner<Node1> hptr0;
+  hazptr_holder hptr0;
   DEBUG_PRINT("=== hptr1");
-  hazptr_owner<Node1> hptr1(myDomain0);
+  hazptr_holder hptr1(myDomain0);
   DEBUG_PRINT("=== hptr2");
-  hazptr_owner<Node1> hptr2(myDomain1);
+  hazptr_holder hptr2(myDomain1);
   DEBUG_PRINT("=== hptr3");
-  hazptr_owner<Node1> hptr3;
+  hazptr_holder hptr3;
 
   DEBUG_PRINT("");
 
@@ -87,11 +91,12 @@ TEST_F(HazptrTest, Test1) {
 
   if (hptr0.try_protect(n0, shared0)) {}
   if (hptr1.try_protect(n1, shared1)) {}
-  hptr1.clear();
-  hptr1.set(n2);
+  hptr1.reset();
+  hptr1.reset(nullptr);
+  hptr1.reset(n2);
   if (hptr2.try_protect(n3, shared3)) {}
   swap(hptr1, hptr2);
-  hptr3.clear();
+  hptr3.reset();
 
   DEBUG_PRINT("");
 
@@ -132,13 +137,13 @@ TEST_F(HazptrTest, Test2) {
   DEBUG_PRINT("");
 
   DEBUG_PRINT("=== hptr0");
-  hazptr_owner<Node2> hptr0;
+  hazptr_holder hptr0;
   DEBUG_PRINT("=== hptr1");
-  hazptr_owner<Node2> hptr1(mineDomain0);
+  hazptr_holder hptr1(mineDomain0);
   DEBUG_PRINT("=== hptr2");
-  hazptr_owner<Node2> hptr2(mineDomain1);
+  hazptr_holder hptr2(mineDomain1);
   DEBUG_PRINT("=== hptr3");
-  hazptr_owner<Node2> hptr3;
+  hazptr_holder hptr3;
 
   DEBUG_PRINT("");
 
@@ -149,11 +154,11 @@ TEST_F(HazptrTest, Test2) {
 
   if (hptr0.try_protect(n0, shared0)) {}
   if (hptr1.try_protect(n1, shared1)) {}
-  hptr1.clear();
-  hptr1.set(n2);
+  hptr1.reset();
+  hptr1.reset(n2);
   if (hptr2.try_protect(n3, shared3)) {}
   swap(hptr1, hptr2);
-  hptr3.clear();
+  hptr3.reset();
 
   DEBUG_PRINT("");
 
@@ -237,4 +242,79 @@ TEST_F(HazptrTest, WIDECAS) {
   v = "333344445555";
   ret = s.cas(u, v);
   CHECK(ret);
+}
+
+TEST_F(HazptrTest, VirtualTest) {
+  struct Thing : public hazptr_obj_base<Thing> {
+    virtual ~Thing() {
+      DEBUG_PRINT("this: " << this << " &a: " << &a << " a: " << a);
+    }
+    int a;
+  };
+  for (int i = 0; i < 100; i++) {
+    auto bar = new Thing;
+    bar->a = i;
+
+    hazptr_holder hptr;
+    hptr.reset(bar);
+    bar->retire();
+    EXPECT_EQ(bar->a, i);
+  }
+}
+
+void destructionTest(hazptr_domain& domain) {
+  struct Thing : public hazptr_obj_base<Thing> {
+    Thing* next;
+    hazptr_domain* domain;
+    int val;
+    Thing(int v, Thing* n, hazptr_domain* d) : next(n), domain(d), val(v) {}
+    ~Thing() {
+      DEBUG_PRINT("this: " << this << " val: " << val << " next: " << next);
+      if (next) {
+        next->retire(*domain);
+      }
+    }
+  };
+  Thing* last{nullptr};
+  for (int i = 0; i < 2000; i++) {
+    last = new Thing(i, last, &domain);
+  }
+  last->retire(domain);
+}
+
+TEST_F(HazptrTest, DestructionTest) {
+  {
+    hazptr_domain myDomain0;
+    destructionTest(myDomain0);
+  }
+  destructionTest(default_hazptr_domain());
+}
+
+TEST_F(HazptrTest, Move) {
+  struct Foo : hazptr_obj_base<Foo> {
+    int a;
+  };
+  for (int i = 0; i < 100; ++i) {
+    Foo* x = new Foo;
+    x->a = i;
+    hazptr_holder hptr0;
+    // Protect object
+    hptr0.reset(x);
+    // Retire object
+    x->retire();
+    // Move constructor - still protected
+    hazptr_holder hptr1(std::move(hptr0));
+    // Self move is no-op - still protected
+    hazptr_holder* phptr1 = &hptr1;
+    CHECK_EQ(phptr1, &hptr1);
+    hptr1 = std::move(*phptr1);
+    // Empty constructor
+    hazptr_holder hptr2(nullptr);
+    // Move assignment - still protected
+    hptr2 = std::move(hptr1);
+    // Access object
+    CHECK_EQ(x->a, i);
+    // Unprotect object - hptr2 is nonempty
+    hptr2.reset();
+  }
 }

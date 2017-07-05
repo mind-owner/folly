@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include <folly/Conv.h>
 #include <folly/Portability.h>
+#include <folly/Range.h>
 #include <folly/ScopeGuard.h>
 #include <folly/portability/Fcntl.h>
 #include <folly/portability/SysUio.h>
@@ -139,8 +139,7 @@ bool readFile(
   constexpr size_t initialAlloc = 1024 * 4;
   out.resize(
     std::min(
-      buf.st_size > 0 ? folly::to<size_t>(buf.st_size + 1) : initialAlloc,
-      num_bytes));
+      buf.st_size > 0 ? (size_t(buf.st_size) + 1) : initialAlloc, num_bytes));
 
   while (soFar < out.size()) {
     const auto actual = readFull(fd, &out[soFar], out.size() - soFar);
@@ -200,11 +199,13 @@ bool readFile(
  * state will be unchanged on error.
  */
 template <class Container>
-bool writeFile(const Container& data, const char* filename,
-              int flags = O_WRONLY | O_CREAT | O_TRUNC) {
+bool writeFile(const Container& data,
+               const char* filename,
+               int flags = O_WRONLY | O_CREAT | O_TRUNC,
+               mode_t mode = 0666) {
   static_assert(sizeof(data[0]) == 1,
                 "writeFile works with element size equal to 1");
-  int fd = open(filename, flags, 0666);
+  int fd = open(filename, flags, mode);
   if (fd == -1) {
     return false;
   }

@@ -16,15 +16,12 @@
 
 #include "SSLContext.h"
 
-#include <openssl/err.h>
-#include <openssl/rand.h>
-#include <openssl/ssl.h>
-#include <openssl/x509v3.h>
-
 #include <folly/Format.h>
 #include <folly/Memory.h>
 #include <folly/Random.h>
+#include <folly/SharedMutex.h>
 #include <folly/SpinLock.h>
+#include <folly/ThreadId.h>
 
 // ---------------------------------------------------------------------
 // SSLContext implementation
@@ -149,16 +146,7 @@ void SSLContext::setClientECCurvesList(
 }
 
 void SSLContext::setServerECCurve(const std::string& curveName) {
-  bool validCall = false;
-#if OPENSSL_VERSION_NUMBER >= 0x0090800fL
-#ifndef OPENSSL_NO_ECDH
-  validCall = true;
-#endif
-#endif
-  if (!validCall) {
-    throw std::runtime_error("Elliptic curve encryption not allowed");
-  }
-
+#if OPENSSL_VERSION_NUMBER >= 0x0090800fL && !defined(OPENSSL_NO_ECDH)
   EC_KEY* ecdh = nullptr;
   int nid;
 
@@ -180,6 +168,9 @@ void SSLContext::setServerECCurve(const std::string& curveName) {
 
   SSL_CTX_set_tmp_ecdh(ctx_, ecdh);
   EC_KEY_free(ecdh);
+#else
+  throw std::runtime_error("Elliptic curve encryption not allowed");
+#endif
 }
 
 void SSLContext::setX509VerifyParam(
@@ -732,20 +723,32 @@ struct SSLLock {
       lockType(inLockType) {
   }
 
-  void lock() {
+  void lock(bool read) {
     if (lockType == SSLContext::LOCK_MUTEX) {
       mutex.lock();
     } else if (lockType == SSLContext::LOCK_SPINLOCK) {
       spinLock.lock();
+    } else if (lockType == SSLContext::LOCK_SHAREDMUTEX) {
+      if (read) {
+        sharedMutex.lock_shared();
+      } else {
+        sharedMutex.lock();
+      }
     }
     // lockType == LOCK_NONE, no-op
   }
 
-  void unlock() {
+  void unlock(bool read) {
     if (lockType == SSLContext::LOCK_MUTEX) {
       mutex.unlock();
     } else if (lockType == SSLContext::LOCK_SPINLOCK) {
       spinLock.unlock();
+    } else if (lockType == SSLContext::LOCK_SHAREDMUTEX) {
+      if (read) {
+        sharedMutex.unlock_shared();
+      } else {
+        sharedMutex.unlock();
+      }
     }
     // lockType == LOCK_NONE, no-op
   }
@@ -753,6 +756,7 @@ struct SSLLock {
   SSLContext::SSLLockType lockType;
   folly::SpinLock spinLock{};
   std::mutex mutex;
+  SharedMutex sharedMutex;
 };
 
 // Statics are unsafe in environments that call exit().
@@ -773,22 +777,14 @@ static std::map<int, SSLContext::SSLLockType>& lockTypes() {
 
 static void callbackLocking(int mode, int n, const char*, int) {
   if (mode & CRYPTO_LOCK) {
-    locks()[size_t(n)].lock();
+    locks()[size_t(n)].lock(mode & CRYPTO_READ);
   } else {
-    locks()[size_t(n)].unlock();
+    locks()[size_t(n)].unlock(mode & CRYPTO_READ);
   }
 }
 
 static unsigned long callbackThreadID() {
-  return static_cast<unsigned long>(
-#ifdef __APPLE__
-    pthread_mach_thread_np(pthread_self())
-#elif _MSC_VER
-    pthread_getw32threadid_np(pthread_self())
-#else
-    pthread_self()
-#endif
-  );
+  return static_cast<unsigned long>(folly::getCurrentThreadID());
 }
 
 static CRYPTO_dynlock_value* dyn_create(const char*, int) {
@@ -811,8 +807,36 @@ static void dyn_destroy(struct CRYPTO_dynlock_value* lock, const char*, int) {
   delete lock;
 }
 
-void SSLContext::setSSLLockTypes(std::map<int, SSLLockType> inLockTypes) {
+void SSLContext::setSSLLockTypesLocked(std::map<int, SSLLockType> inLockTypes) {
   lockTypes() = inLockTypes;
+}
+
+void SSLContext::setSSLLockTypes(std::map<int, SSLLockType> inLockTypes) {
+  std::lock_guard<std::mutex> g(initMutex());
+  if (initialized_) {
+    // We set the locks on initialization, so if we are already initialized
+    // this would have no affect.
+    LOG(INFO) << "Ignoring setSSLLockTypes after initialization";
+    return;
+  }
+  setSSLLockTypesLocked(std::move(inLockTypes));
+}
+
+void SSLContext::setSSLLockTypesAndInitOpenSSL(
+    std::map<int, SSLLockType> inLockTypes) {
+  std::lock_guard<std::mutex> g(initMutex());
+  CHECK(!initialized_) << "OpenSSL is already initialized";
+  setSSLLockTypesLocked(std::move(inLockTypes));
+  initializeOpenSSLLocked();
+}
+
+bool SSLContext::isSSLLockDisabled(int lockId) {
+  std::lock_guard<std::mutex> g(initMutex());
+  CHECK(initialized_) << "OpenSSL is not initialized yet";
+  const auto& sslLocks = lockTypes();
+  const auto it = sslLocks.find(lockId);
+  return it != sslLocks.end() &&
+      it->second == SSLContext::SSLLockType::LOCK_NONE;
 }
 
 #if defined(SSL_MODE_HANDSHAKE_CUTTHROUGH)
@@ -839,7 +863,7 @@ void SSLContext::initializeOpenSSLLocked() {
   SSL_load_error_strings();
   ERR_load_crypto_strings();
   // static locking
-  locks().reset(new SSLLock[size_t(::CRYPTO_num_locks())]);
+  locks().reset(new SSLLock[size_t(CRYPTO_num_locks())]);
   for (auto it: lockTypes()) {
     locks()[size_t(it.first)].lockType = it.second;
   }
@@ -875,7 +899,7 @@ void SSLContext::cleanupOpenSSLLocked() {
   CRYPTO_cleanup_all_ex_data();
   ERR_free_strings();
   EVP_cleanup();
-  ERR_remove_state(0);
+  ERR_clear_error();
   locks().reset();
   initialized_ = false;
 }

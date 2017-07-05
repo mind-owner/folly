@@ -133,7 +133,7 @@ public:
       , exception(AsyncSocketException::UNKNOWN, "none")
       , mcb_(mcb) {}
 
-  ~WriteCallbackBase() {
+  ~WriteCallbackBase() override {
     EXPECT_EQ(STATE_SUCCEEDED, state);
   }
 
@@ -145,7 +145,7 @@ public:
     }
   }
 
-  virtual void writeSuccess() noexcept override {
+  void writeSuccess() noexcept override {
     std::cerr << "writeSuccess" << std::endl;
     state = STATE_SUCCEEDED;
   }
@@ -175,7 +175,7 @@ public:
   explicit ExpectWriteErrorCallback(SendMsgParamsCallbackBase* mcb = nullptr)
       : WriteCallbackBase(mcb) {}
 
-  ~ExpectWriteErrorCallback() {
+  ~ExpectWriteErrorCallback() override {
     EXPECT_EQ(STATE_FAILED, state);
     EXPECT_EQ(exception.type_,
              AsyncSocketException::AsyncSocketExceptionType::NETWORK_ERROR);
@@ -203,7 +203,7 @@ public:
   explicit WriteCheckTimestampCallback(SendMsgParamsCallbackBase* mcb = nullptr)
     : WriteCallbackBase(mcb) {}
 
-  ~WriteCheckTimestampCallback() {
+  ~WriteCheckTimestampCallback() override {
     EXPECT_EQ(STATE_SUCCEEDED, state);
     EXPECT_TRUE(gotTimestamp_);
     EXPECT_TRUE(gotByteSeq_);
@@ -283,7 +283,7 @@ public AsyncTransportWrapper::ReadCallback {
   explicit ReadCallbackBase(WriteCallbackBase* wcb)
       : wcb_(wcb), state(STATE_WAITING) {}
 
-  ~ReadCallbackBase() {
+  ~ReadCallbackBase() override {
     EXPECT_EQ(STATE_SUCCEEDED, state);
   }
 
@@ -323,7 +323,7 @@ public:
       : ReadCallbackBase(wcb)
       , buffers() {}
 
-  ~ReadCallback() {
+  ~ReadCallback() override {
     for (std::vector<Buffer>::iterator it = buffers.begin();
          it != buffers.end();
          ++it) {
@@ -539,7 +539,7 @@ public:
     cv_.wait(lock, [this] { return state != STATE_WAITING; });
   }
 
-  ~HandshakeCallback() {
+  ~HandshakeCallback() override {
     EXPECT_EQ(STATE_SUCCEEDED, state);
   }
 
@@ -570,7 +570,7 @@ public:
       SSLServerAcceptCallbackBase(hcb),
       timeout_(timeout) {}
 
-  virtual ~SSLServerAcceptCallback() {
+  ~SSLServerAcceptCallback() override {
     if (timeout_ > 0) {
       // if we set a timeout, we expect failure
       EXPECT_EQ(hcb_->state, STATE_FAILED);
@@ -755,8 +755,10 @@ class TestSSLAsyncCacheServer : public TestSSLServer {
         int lookupDelay = 100) :
       TestSSLServer(acb) {
     SSL_CTX *sslCtx = ctx_->getSSLCtx();
+#ifdef SSL_ERROR_WANT_SESS_CACHE_LOOKUP
     SSL_CTX_sess_set_get_cb(sslCtx,
                             TestSSLAsyncCacheServer::getSessionCallback);
+#endif
     SSL_CTX_set_session_cache_mode(
       sslCtx, SSL_SESS_CACHE_NO_INTERNAL | SSL_SESS_CACHE_SERVER);
     asyncCallbacks_ = 0;
@@ -966,6 +968,7 @@ class NpnClient :
   const unsigned char* nextProto;
   unsigned nextProtoLength;
   SSLContext::NextProtocolType protocolType;
+  folly::Optional<AsyncSocketException> except;
 
  private:
   void handshakeSuc(AsyncSSLSocket*) noexcept override {
@@ -975,7 +978,7 @@ class NpnClient :
   void handshakeErr(
     AsyncSSLSocket*,
     const AsyncSocketException& ex) noexcept override {
-    ADD_FAILURE() << "client handshake error: " << ex.what();
+    except = ex;
   }
   void writeSuccess() noexcept override {
     socket_->close();
@@ -1002,6 +1005,7 @@ class NpnServer :
   const unsigned char* nextProto;
   unsigned nextProtoLength;
   SSLContext::NextProtocolType protocolType;
+  folly::Optional<AsyncSocketException> except;
 
  private:
   void handshakeSuc(AsyncSSLSocket*) noexcept override {
@@ -1011,7 +1015,7 @@ class NpnServer :
   void handshakeErr(
     AsyncSSLSocket*,
     const AsyncSocketException& ex) noexcept override {
-    ADD_FAILURE() << "server handshake error: " << ex.what();
+    except = ex;
   }
   void getReadBuffer(void** /* bufReturn */, size_t* lenReturn) override {
     *lenReturn = 0;
@@ -1036,7 +1040,7 @@ class RenegotiatingServer : public AsyncSSLSocket::HandshakeCB,
     socket_->sslAccept(this);
   }
 
-  ~RenegotiatingServer() {
+  ~RenegotiatingServer() override {
     socket_->setReadCB(nullptr);
   }
 
@@ -1214,7 +1218,7 @@ class SSLClient : public AsyncSocket::ConnectCallback,
     memset(buf_, 'a', sizeof(buf_));
   }
 
-  ~SSLClient() {
+  ~SSLClient() override {
     if (session_) {
       SSL_SESSION_free(session_);
     }

@@ -33,7 +33,7 @@ struct MyObject {
 typedef folly::AtomicHashMap<int,std::shared_ptr<MyObject>> MyMap;
 typedef std::lock_guard<std::mutex> Guard;
 
-std::unique_ptr<MyMap> newMap() { return folly::make_unique<MyMap>(100); }
+std::unique_ptr<MyMap> newMap() { return std::make_unique<MyMap>(100); }
 
 struct MyObjectDirectory {
   MyObjectDirectory()
@@ -108,17 +108,15 @@ TEST(AHMIntStressTest, Test) {
 
   std::vector<std::thread> threads;
   for (int threadId = 0; threadId < 64; ++threadId) {
-    threads.emplace_back(
-      [objs,threadId] {
-        for (int recycles = 0; recycles < 500; ++recycles) {
-          for (int i = 0; i < 10; i++) {
-            auto val = objs->get(i);
-          }
-
-          objs->archive();
+    threads.emplace_back([objs] {
+      for (int recycles = 0; recycles < 500; ++recycles) {
+        for (int i = 0; i < 10; i++) {
+          auto val = objs->get(i);
         }
+
+        objs->archive();
       }
-    );
+    });
   }
 
   for (auto& t : threads) t.join();

@@ -17,7 +17,6 @@
 #pragma once
 
 #include <limits.h>
-#include <pthread.h>
 
 #include <atomic>
 #include <functional>
@@ -34,6 +33,8 @@
 #include <folly/MicroSpinLock.h>
 #include <folly/Portability.h>
 #include <folly/ScopeGuard.h>
+#include <folly/SharedMutex.h>
+#include <folly/portability/PThread.h>
 
 #include <folly/detail/StaticSingletonManager.h>
 
@@ -50,6 +51,10 @@
 #endif
 
 namespace folly {
+
+enum class TLPDestructionMode { THIS_THREAD, ALL_THREADS };
+struct AccessModeStrict {};
+
 namespace threadlocal_detail {
 
 /**

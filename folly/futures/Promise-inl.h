@@ -60,6 +60,10 @@ void Promise<T>::throwIfRetrieved() {
 }
 
 template <class T>
+Promise<T>::Promise(detail::EmptyConstruct) noexcept
+    : retrieved_(false), core_(nullptr) {}
+
+template <class T>
 Promise<T>::~Promise() {
   detach();
 }
@@ -134,7 +138,7 @@ void Promise<T>::setWith(F&& func) {
 }
 
 template <class T>
-bool Promise<T>::isFulfilled() {
+bool Promise<T>::isFulfilled() const noexcept {
   if (core_) {
     return core_->hasResult();
   }

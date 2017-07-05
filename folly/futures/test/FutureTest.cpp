@@ -76,6 +76,15 @@ TEST(Future, makeFutureWithUnit) {
   EXPECT_EQ(1, count);
 }
 
+namespace {
+Future<int> onErrorHelperEggs(const eggs_t&) {
+  return makeFuture(10);
+}
+Future<int> onErrorHelperGeneric(const std::exception&) {
+  return makeFuture(20);
+}
+}
+
 TEST(Future, onError) {
   bool theFlag = false;
   auto flag = [&]{ theFlag = true; };
@@ -189,6 +198,28 @@ TEST(Future, onError) {
                  });
     EXPECT_FLAG();
     EXPECT_NO_THROW(f.value());
+  }
+
+  // Function pointer
+  {
+    auto f = makeFuture()
+                 .then([]() -> int { throw eggs; })
+                 .onError(onErrorHelperEggs)
+                 .onError(onErrorHelperGeneric);
+    EXPECT_EQ(10, f.value());
+  }
+  {
+    auto f = makeFuture()
+                 .then([]() -> int { throw std::runtime_error("test"); })
+                 .onError(onErrorHelperEggs)
+                 .onError(onErrorHelperGeneric);
+    EXPECT_EQ(20, f.value());
+  }
+  {
+    auto f = makeFuture()
+                 .then([]() -> int { throw std::runtime_error("test"); })
+                 .onError(onErrorHelperEggs);
+    EXPECT_THROW(f.value(), std::runtime_error);
   }
 
   // No throw
@@ -618,7 +649,10 @@ TEST(Future, finishBigLambda) {
   EXPECT_EQ(bulk_data[0], 0);
 
   Promise<int> p;
-  auto f = p.getFuture().then([x, bulk_data](Try<int>&& t) { *x = t.value(); });
+  auto f = p.getFuture().then([x, bulk_data](Try<int>&& t) {
+    (void)bulk_data;
+    *x = t.value();
+  });
 
   // The callback hasn't executed
   EXPECT_EQ(0, *x);
@@ -722,8 +756,8 @@ TEST(Future, detachRace) {
   // slow test so I won't do that but if it ever fails, take it seriously, and
   // run the test binary with "--gtest_repeat=10000 --gtest_filter=*detachRace"
   // (Don't forget to enable ASAN)
-  auto p = folly::make_unique<Promise<bool>>();
-  auto f = folly::make_unique<Future<bool>>(p->getFuture());
+  auto p = std::make_unique<Promise<bool>>();
+  auto f = std::make_unique<Future<bool>>(p->getFuture());
   folly::Baton<> baton;
   std::thread t1([&]{
     baton.post();
@@ -818,7 +852,7 @@ TEST(Future, RequestContext) {
   {
     folly::RequestContextScopeGuard rctx;
     RequestContext::get()->setContextData(
-        "key", folly::make_unique<MyRequestData>(true));
+        "key", std::make_unique<MyRequestData>(true));
     auto checker = [](int lineno) {
       return [lineno](Try<int>&& /* t */) {
         auto d = static_cast<MyRequestData*>(

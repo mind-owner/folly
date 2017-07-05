@@ -52,7 +52,7 @@ constexpr bool kHasUnalignedAccess = false;
 # endif
 /* nolint */
 # define _USE_ATTRIBUTES_FOR_SAL 1
-# include <sal.h>
+# include <sal.h> // @manual
 # define FOLLY_PRINTF_FORMAT _Printf_format_string_
 # define FOLLY_PRINTF_FORMAT_ATTR(format_param, dots_param) /**/
 #else
@@ -71,12 +71,19 @@ constexpr bool kHasUnalignedAccess = false;
 #endif
 
 // warn unused result
+#if defined(__has_cpp_attribute)
+#if __has_cpp_attribute(nodiscard)
+#define FOLLY_NODISCARD [[nodiscard]]
+#endif
+#endif
+#if !defined FOLLY_NODISCARD
 #if defined(_MSC_VER) && (_MSC_VER >= 1700)
-#define FOLLY_WARN_UNUSED_RESULT _Check_return_
+#define FOLLY_NODISCARD _Check_return_
 #elif defined(__clang__) || defined(__GNUC__)
-#define FOLLY_WARN_UNUSED_RESULT __attribute__((__warn_unused_result__))
+#define FOLLY_NODISCARD __attribute__((__warn_unused_result__))
 #else
-#define FOLLY_WARN_UNUSED_RESULT
+#define FOLLY_NODISCARD
+#endif
 #endif
 
 // target
@@ -111,6 +118,21 @@ constexpr bool kIsArchAArch64 = FOLLY_A64 == 1;
 constexpr bool kIsArchPPC64 = FOLLY_PPC64 == 1;
 }
 
+namespace folly {
+
+#if FOLLY_SANITIZE_ADDRESS
+constexpr bool kIsSanitizeAddress = true;
+#else
+constexpr bool kIsSanitizeAddress = false;
+#endif
+
+#if FOLLY_SANITIZE_THREAD
+constexpr bool kIsSanitizeThread = true;
+#else
+constexpr bool kIsSanitizeThread = false;
+#endif
+}
+
 // packing is very ugly in msvc
 #ifdef _MSC_VER
 # define FOLLY_PACK_ATTR /**/
@@ -136,12 +158,10 @@ constexpr bool kIsArchPPC64 = FOLLY_PPC64 == 1;
 #elif defined(__clang__) || defined(__GNUC__)
 # define FOLLY_PUSH_WARNING _Pragma("GCC diagnostic push")
 # define FOLLY_POP_WARNING _Pragma("GCC diagnostic pop")
-#define FOLLY_GCC_DISABLE_WARNING_INTERNAL3(warningName) #warningName
-#define FOLLY_GCC_DISABLE_WARNING_INTERNAL2(warningName) \
-  FOLLY_GCC_DISABLE_WARNING_INTERNAL3(warningName)
-#define FOLLY_GCC_DISABLE_WARNING(warningName)                       \
-  _Pragma(FOLLY_GCC_DISABLE_WARNING_INTERNAL2(GCC diagnostic ignored \
-          FOLLY_GCC_DISABLE_WARNING_INTERNAL3(-W##warningName)))
+# define FOLLY_GCC_DISABLE_WARNING_INTERNAL2(warningName) #warningName
+# define FOLLY_GCC_DISABLE_WARNING(warningName) \
+  _Pragma(                                      \
+  FOLLY_GCC_DISABLE_WARNING_INTERNAL2(GCC diagnostic ignored warningName))
 // Disable the MSVC warnings.
 # define FOLLY_MSVC_DISABLE_WARNING(warningNumber)
 #else
@@ -153,17 +173,10 @@ constexpr bool kIsArchPPC64 = FOLLY_PPC64 == 1;
 
 #ifdef HAVE_SHADOW_LOCAL_WARNINGS
 #define FOLLY_GCC_DISABLE_NEW_SHADOW_WARNINGS        \
-  FOLLY_GCC_DISABLE_WARNING(shadow-compatible-local) \
-  FOLLY_GCC_DISABLE_WARNING(shadow-local)
+  FOLLY_GCC_DISABLE_WARNING("-Wshadow-compatible-local") \
+  FOLLY_GCC_DISABLE_WARNING("-Wshadow-local")
 #else
 #define FOLLY_GCC_DISABLE_NEW_SHADOW_WARNINGS /* empty */
-#endif
-
-#if defined(__GNUC__) && !defined(__APPLE__) && !__GNUC_PREREQ(4,9)
-// https://gcc.gnu.org/bugzilla/show_bug.cgi?id=56019
-// gcc 4.8.x incorrectly placed max_align_t in the root namespace
-// Alias it into std (where it's found in 4.9 and later)
-namespace std { typedef ::max_align_t max_align_t; }
 #endif
 
 // portable version check for clang
@@ -200,7 +213,7 @@ namespace std { typedef ::max_align_t max_align_t; }
 // the 'std' namespace; the latter uses inline namespaces. Wrap this decision
 // up in a macro to make forward-declarations easier.
 #if FOLLY_USE_LIBCPP
-#include <__config>
+#include <__config> // @manual
 #define FOLLY_NAMESPACE_STD_BEGIN     _LIBCPP_BEGIN_NAMESPACE_STD
 #define FOLLY_NAMESPACE_STD_END       _LIBCPP_END_NAMESPACE_STD
 #else
@@ -298,7 +311,7 @@ using namespace FOLLY_GFLAGS_NAMESPACE;
 
 // for TARGET_OS_IPHONE
 #ifdef __APPLE__
-#include <TargetConditionals.h>
+#include <TargetConditionals.h> // @manual
 #endif
 
 // RTTI may not be enabled for this compilation unit.
@@ -318,6 +331,12 @@ using namespace FOLLY_GFLAGS_NAMESPACE;
 
 namespace folly {
 
+#if __OBJC__
+constexpr auto kIsObjC = true;
+#else
+constexpr auto kIsObjC = false;
+#endif
+
 #if defined(__linux__) && !FOLLY_MOBILE
 constexpr auto kIsLinux = true;
 #else
@@ -326,7 +345,9 @@ constexpr auto kIsLinux = false;
 
 #if defined(_WIN32)
 constexpr auto kIsWindows = true;
+constexpr auto kMscVer = _MSC_VER;
 #else
 constexpr auto kIsWindows = false;
+constexpr auto kMscVer = 0;
 #endif
 }

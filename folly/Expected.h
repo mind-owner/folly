@@ -32,8 +32,9 @@
 #include <folly/Likely.h>
 #include <folly/Portability.h>
 #include <folly/Preprocessor.h>
-#include <folly/Traits.h> // for construct_in_place_t
+#include <folly/Traits.h>
 #include <folly/Unit.h>
+#include <folly/Utility.h>
 
 #define FOLLY_EXPECTED_ID(X) FB_CONCATENATE(FB_CONCATENATE(Folly, X), __LINE__)
 
@@ -233,6 +234,11 @@ struct ExpectedStorage {
   Value&& value() && {
     return std::move(value_);
   }
+  // TODO (t17322426): remove when VS2015 support is deprecated
+  // VS2015 static analyzer incorrectly flags these as unreachable in certain
+  // circumstances. VS2017 does not have this problem on the same code.
+  FOLLY_PUSH_WARNING
+  FOLLY_MSVC_DISABLE_WARNING(4702) // unreachable code
   Error& error() & {
     return error_;
   }
@@ -242,6 +248,7 @@ struct ExpectedStorage {
   Error&& error() && {
     return std::move(error_);
   }
+  FOLLY_POP_WARNING
 };
 
 template <class Value, class Error>
@@ -527,6 +534,11 @@ struct ExpectedStorage<Value, Error, StorageType::ePODStruct> {
   Value&& value() && {
     return std::move(value_);
   }
+  // TODO (t17322426): remove when VS2015 support is deprecated
+  // VS2015 static analyzer incorrectly flags these as unreachable in certain
+  // circumstances. VS2017 does not have this problem on the same code.
+  FOLLY_PUSH_WARNING
+  FOLLY_MSVC_DISABLE_WARNING(4702) // unreachable code
   Error& error() & {
     return error_;
   }
@@ -536,6 +548,7 @@ struct ExpectedStorage<Value, Error, StorageType::ePODStruct> {
   Error&& error() && {
     return std::move(error_);
   }
+  FOLLY_POP_WARNING
 };
 
 namespace expected_detail_ExpectedHelper {

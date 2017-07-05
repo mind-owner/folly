@@ -27,7 +27,7 @@ namespace fibers {
 class EventBaseLoopController : public LoopController {
  public:
   explicit EventBaseLoopController();
-  ~EventBaseLoopController();
+  ~EventBaseLoopController() override;
 
   /**
    * Attach EventBase after LoopController was created.
@@ -60,7 +60,7 @@ class EventBaseLoopController : public LoopController {
   class DestructionCallback : public folly::EventBase::LoopCallback {
    public:
     DestructionCallback() : alive_(new int(42)) {}
-    ~DestructionCallback() {
+    ~DestructionCallback() override {
       reset();
     }
 
@@ -107,7 +107,6 @@ class EventBaseLoopController : public LoopController {
 
   friend class FiberManager;
 };
-
 }
 } // folly::fibers
 

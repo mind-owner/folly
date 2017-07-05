@@ -53,6 +53,31 @@ class Future {
   Future(Future&&) noexcept;
   Future& operator=(Future&&) noexcept;
 
+  // converting move
+  template <
+      class T2,
+      typename std::enable_if<
+          !std::is_same<T, typename std::decay<T2>::type>::value &&
+              std::is_constructible<T, T2&&>::value &&
+              std::is_convertible<T2&&, T>::value,
+          int>::type = 0>
+  /* implicit */ Future(Future<T2>&&);
+  template <
+      class T2,
+      typename std::enable_if<
+          !std::is_same<T, typename std::decay<T2>::type>::value &&
+              std::is_constructible<T, T2&&>::value &&
+              !std::is_convertible<T2&&, T>::value,
+          int>::type = 0>
+  explicit Future(Future<T2>&&);
+  template <
+      class T2,
+      typename std::enable_if<
+          !std::is_same<T, typename std::decay<T2>::type>::value &&
+              std::is_constructible<T, T2&&>::value,
+          int>::type = 0>
+  Future& operator=(Future<T2>&&);
+
   /// Construct a Future from a value (perfect forwarding)
   template <class T2 = T, typename =
             typename std::enable_if<
@@ -210,9 +235,12 @@ class Future {
   /// In the former both b and c execute via x. In the latter, only b executes
   /// via x, and c executes via the same executor (if any) that f had.
   template <class Executor, class Arg, class... Args>
-  auto then(Executor* x, Arg&& arg, Args&&... args)
-    -> decltype(this->then(std::forward<Arg>(arg),
-                           std::forward<Args>(args)...));
+  auto then(Executor* x, Arg&& arg, Args&&... args) {
+    auto oldX = getExecutor();
+    setExecutor(x);
+    return this->then(std::forward<Arg>(arg), std::forward<Args>(args)...)
+        .via(oldX);
+  }
 
   /// Convenience method for ignoring the value and creating a Future<Unit>.
   /// Exceptions still propagate.
@@ -402,14 +430,17 @@ class Future {
   ///
   ///   f.thenMulti(a, b, c);
   template <class Callback, class... Callbacks>
-  auto thenMulti(Callback&& fn, Callbacks&&... fns)
-    -> decltype(this->then(std::forward<Callback>(fn)).
-                      thenMulti(std::forward<Callbacks>(fns)...));
+  auto thenMulti(Callback&& fn, Callbacks&&... fns) {
+    // thenMulti with two callbacks is just then(a).thenMulti(b, ...)
+    return then(std::forward<Callback>(fn))
+        .thenMulti(std::forward<Callbacks>(fns)...);
+  }
 
-  // Nothing to see here, just thenMulti's base case
   template <class Callback>
-  auto thenMulti(Callback&& fn)
-    -> decltype(this->then(std::forward<Callback>(fn)));
+  auto thenMulti(Callback&& fn) {
+    // thenMulti with one callback is just a then
+    return then(std::forward<Callback>(fn));
+  }
 
   /// Create a Future chain from a sequence of callbacks. i.e.
   ///
@@ -420,14 +451,21 @@ class Future {
   ///
   ///   f.thenMultiWithExecutor(executor, a, b, c);
   template <class Callback, class... Callbacks>
-  auto thenMultiWithExecutor(Executor* x, Callback&& fn, Callbacks&&... fns)
-    -> decltype(this->then(std::forward<Callback>(fn)).
-                      thenMulti(std::forward<Callbacks>(fns)...));
+  auto thenMultiWithExecutor(Executor* x, Callback&& fn, Callbacks&&... fns) {
+    // thenMultiExecutor with two callbacks is
+    // via(x).then(a).thenMulti(b, ...).via(oldX)
+    auto oldX = getExecutor();
+    setExecutor(x);
+    return then(std::forward<Callback>(fn))
+        .thenMulti(std::forward<Callbacks>(fns)...)
+        .via(oldX);
+  }
 
-  // Nothing to see here, just thenMultiWithExecutor's base case
   template <class Callback>
-  auto thenMultiWithExecutor(Executor* x, Callback&& fn)
-    -> decltype(this->then(std::forward<Callback>(fn)));
+  auto thenMultiWithExecutor(Executor* x, Callback&& fn) {
+    // thenMulti with one callback is just a then with an executor
+    return then(x, std::forward<Callback>(fn));
+  }
 
   /// Discard a result, but propagate an exception.
   Future<Unit> unit() {

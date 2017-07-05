@@ -215,7 +215,7 @@ extern "C" int clock_gettime(clockid_t clock_id, struct timespec* tp) {
   }
 
   const auto unanosToTimespec = [](timespec* tp, unsigned_nanos t) -> int {
-    static constexpr unsigned_nanos one_sec(std::chrono::seconds(1));
+    static constexpr unsigned_nanos one_sec{std::chrono::seconds(1)};
     tp->tv_sec =
         time_t(std::chrono::duration_cast<std::chrono::seconds>(t).count());
     tp->tv_nsec = long((t % one_sec).count());
@@ -325,9 +325,10 @@ int nanosleep(const struct timespec* request, struct timespec* remain) {
   return 0;
 }
 
-char* strptime(const char* __restrict s,
-               const char* __restrict f,
-               struct tm* __restrict tm) {
+char* strptime(
+    const char* __restrict s,
+    const char* __restrict f,
+    struct tm* __restrict tm) {
   // Isn't the C++ standard lib nice? std::get_time is defined such that its
   // format parameters are the exact same as strptime. Of course, we have to
   // create a string stream first, and imbue it with the current C locale, and

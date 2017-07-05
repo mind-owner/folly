@@ -17,27 +17,28 @@
 #pragma once
 #define FOLLY_GEN_CORE_H_
 
-namespace folly { namespace gen {
+namespace folly {
+namespace gen {
 
-template<class Value, class Self>
+template <class Value, class Self>
 class GenImpl;
 
-template<class Self>
+template <class Self>
 class Operator;
 
 namespace detail {
 
-template<class Self>
+template <class Self>
 struct FBounded;
 
-template<class First, class Second>
+template <class First, class Second>
 class Composed;
 
-template<class Value, class First, class Second>
+template <class Value, class First, class Second>
 class Chain;
 
 } // detail
-
-}} // folly::gen
+} // gen
+} // folly
 
 #include <folly/gen/Core-inl.h>

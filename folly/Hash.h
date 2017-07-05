@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -214,8 +215,10 @@ inline uint32_t jenkins_rev_unmix32(uint32_t key) {
 const uint32_t FNV_32_HASH_START = 2166136261UL;
 const uint64_t FNV_64_HASH_START = 14695981039346656037ULL;
 
-inline uint32_t fnv32(const char* s,
-                      uint32_t hash = FNV_32_HASH_START) {
+inline uint32_t fnv32(const char* buf, uint32_t hash = FNV_32_HASH_START) {
+  // forcing signed char, since other platforms can use unsigned
+  const signed char* s = reinterpret_cast<const signed char*>(buf);
+
   for (; *s; ++s) {
     hash += (hash << 1) + (hash << 4) + (hash << 7) +
             (hash << 8) + (hash << 24);
@@ -244,8 +247,10 @@ inline uint32_t fnv32(const std::string& str,
   return fnv32_buf(str.data(), str.size(), hash);
 }
 
-inline uint64_t fnv64(const char* s,
-                      uint64_t hash = FNV_64_HASH_START) {
+inline uint64_t fnv64(const char* buf, uint64_t hash = FNV_64_HASH_START) {
+  // forcing signed char, since other platforms can use unsigned
+  const signed char* s = reinterpret_cast<const signed char*>(buf);
+
   for (; *s; ++s) {
     hash += (hash << 1) + (hash << 4) + (hash << 5) + (hash << 7) +
       (hash << 8) + (hash << 40);
@@ -365,7 +370,7 @@ template <>
 struct hasher<bool> {
   size_t operator()(bool key) const {
     // Make sure that all the output bits depend on the input.
-    return -static_cast<size_t>(key);
+    return key ? std::numeric_limits<size_t>::max() : 0;
   }
 };
 
@@ -378,6 +383,38 @@ template<> struct hasher<int32_t> {
 template<> struct hasher<uint32_t> {
   size_t operator()(uint32_t key) const {
     return hash::jenkins_rev_mix32(key);
+  }
+};
+
+template<> struct hasher<int16_t> {
+  size_t operator()(int16_t key) const {
+    return hasher<int32_t>()(key); // as impl accident, sign-extends
+  }
+};
+
+template<> struct hasher<uint16_t> {
+  size_t operator()(uint16_t key) const {
+    return hasher<uint32_t>()(key);
+  }
+};
+
+template<> struct hasher<int8_t> {
+  size_t operator()(int8_t key) const {
+    return hasher<int32_t>()(key); // as impl accident, sign-extends
+  }
+};
+
+template<> struct hasher<uint8_t> {
+  size_t operator()(uint8_t key) const {
+    return hasher<uint32_t>()(key);
+  }
+};
+
+template<> struct hasher<char> {
+  using explicit_type =
+      std::conditional<std::is_signed<char>::value, int8_t, uint8_t>::type;
+  size_t operator()(char key) const {
+    return hasher<explicit_type>()(key); // as impl accident, sign-extends
   }
 };
 

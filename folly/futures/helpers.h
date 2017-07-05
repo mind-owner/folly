@@ -15,10 +15,57 @@
  */
 #pragma once
 
-#include <folly/futures/Future.h>
+#include <atomic>
+#include <tuple>
+#include <utility>
+
 #include <folly/Portability.h>
+#include <folly/Try.h>
+#include <folly/futures/Future.h>
+#include <folly/futures/Promise.h>
 
 namespace folly {
+
+namespace detail {
+template <typename... Ts>
+struct CollectAllVariadicContext {
+  CollectAllVariadicContext() {}
+  template <typename T, size_t I>
+  inline void setPartialResult(Try<T>& t) {
+    std::get<I>(results) = std::move(t);
+  }
+  ~CollectAllVariadicContext() {
+    p.setValue(std::move(results));
+  }
+  Promise<std::tuple<Try<Ts>...>> p;
+  std::tuple<Try<Ts>...> results;
+  typedef Future<std::tuple<Try<Ts>...>> type;
+};
+
+template <typename... Ts>
+struct CollectVariadicContext {
+  CollectVariadicContext() {}
+  template <typename T, size_t I>
+  inline void setPartialResult(Try<T>& t) {
+    if (t.hasException()) {
+      if (!threw.exchange(true)) {
+        p.setException(std::move(t.exception()));
+      }
+    } else if (!threw) {
+      std::get<I>(results) = std::move(t);
+    }
+  }
+  ~CollectVariadicContext() noexcept {
+    if (!threw.exchange(true)) {
+      p.setValue(unwrapTryTuple(std::move(results)));
+    }
+  }
+  Promise<std::tuple<Ts...>> p;
+  std::tuple<folly::Try<Ts>...> results;
+  std::atomic<bool> threw{false};
+  typedef Future<std::tuple<Ts...>> type;
+};
+}
 
 /// This namespace is for utility functions that would usually be static
 /// members of Future, except they don't make sense there because they don't
@@ -148,7 +195,7 @@ inline Future<Unit> via(
 /// easier to read and slightly more efficient.
 template <class Func>
 auto via(Executor*, Func&& func)
-  -> Future<typename isFuture<decltype(func())>::Inner>;
+    -> Future<typename isFuture<decltype(std::declval<Func>()())>::Inner>;
 
 /** When all the input Futures complete, the returned Future will complete.
   Errors do not cause early termination; this Future will always succeed
@@ -363,6 +410,9 @@ namespace futures {
  *  indicating that the failure was transitory.
  *
  *  Cancellation is not supported.
+ *
+ *  If both FF and Policy inline executes, then it is possible to hit a stack
+ *  overflow due to the recursive nature of the retry implementation
  */
 template <class Policy, class FF>
 typename std::result_of<FF(size_t)>::type

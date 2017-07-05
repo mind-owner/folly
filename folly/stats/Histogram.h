@@ -25,7 +25,7 @@
 #include <vector>
 
 #include <folly/CPortability.h>
-#include <folly/detail/Stats.h>
+#include <folly/stats/detail/Bucket.h>
 
 namespace folly {
 
@@ -53,8 +53,11 @@ class HistogramBuckets {
    *
    * (max - min) must be larger than or equal to bucketSize.
    */
-  HistogramBuckets(ValueType bucketSize, ValueType min, ValueType max,
-                   const BucketType& defaultBucket);
+  HistogramBuckets(
+      ValueType bucketSize,
+      ValueType min,
+      ValueType max,
+      const BucketType& defaultBucket);
 
   /* Returns the bucket size of each bucket in the histogram. */
   ValueType getBucketSize() const {
@@ -191,9 +194,10 @@ class HistogramBuckets {
    *         percentage of the data points in the histogram are less than N.
    */
   template <typename CountFn, typename AvgFn>
-  ValueType getPercentileEstimate(double pct,
-                                  CountFn countFromBucket,
-                                  AvgFn avgFromBucket) const;
+  ValueType getPercentileEstimate(
+      double pct,
+      CountFn countFromBucket,
+      AvgFn avgFromBucket) const;
 
   /*
    * Iterator access to the buckets.
@@ -224,7 +228,6 @@ class HistogramBuckets {
 
 } // detail
 
-
 /*
  * A basic histogram class.
  *
@@ -242,12 +245,12 @@ class Histogram {
   typedef detail::Bucket<T> Bucket;
 
   Histogram(ValueType bucketSize, ValueType min, ValueType max)
-    : buckets_(bucketSize, min, max, Bucket()) {}
+      : buckets_(bucketSize, min, max, Bucket()) {}
 
   /* Add a data point to the histogram */
-  void addValue(ValueType value)
-      FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("signed-integer-overflow")
-      FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("unsigned-integer-overflow") {
+  void addValue(ValueType value) FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER(
+      "signed-integer-overflow",
+      "unsigned-integer-overflow") {
     Bucket& bucket = buckets_.getByValue(value);
     // NOTE: Overflow is handled elsewhere and tests check this
     // behavior (see HistogramTest.cpp TestOverflow* tests).
@@ -258,8 +261,9 @@ class Histogram {
 
   /* Add multiple same data points to the histogram */
   void addRepeatedValue(ValueType value, uint64_t nSamples)
-      FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("signed-integer-overflow")
-      FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("unsigned-integer-overflow") {
+      FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER(
+          "signed-integer-overflow",
+          "unsigned-integer-overflow") {
     Bucket& bucket = buckets_.getByValue(value);
     // NOTE: Overflow is handled elsewhere and tests check this
     // behavior (see HistogramTest.cpp TestOverflow* tests).
@@ -276,8 +280,8 @@ class Histogram {
    * requested value from the appropriate bucket's sum.
    */
   void removeValue(ValueType value) FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER(
-      "signed-integer-overflow")
-      FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("unsigned-integer-overflow") {
+      "signed-integer-overflow",
+      "unsigned-integer-overflow") {
     Bucket& bucket = buckets_.getByValue(value);
     // NOTE: Overflow is handled elsewhere and tests check this
     // behavior (see HistogramTest.cpp TestOverflow* tests).
@@ -312,13 +316,11 @@ class Histogram {
   }
 
   /* Subtract another histogram data from the histogram */
-  void subtract(const Histogram &hist) {
+  void subtract(const Histogram& hist) {
     // the two histogram bucket definitions must match to support
     // subtract.
-    if (getBucketSize() != hist.getBucketSize() ||
-        getMin() != hist.getMin() ||
-        getMax() != hist.getMax() ||
-        getNumBuckets() != hist.getNumBuckets() ) {
+    if (getBucketSize() != hist.getBucketSize() || getMin() != hist.getMin() ||
+        getMax() != hist.getMax() || getNumBuckets() != hist.getNumBuckets()) {
       throw std::invalid_argument("Cannot subtract input histogram.");
     }
 
@@ -328,13 +330,11 @@ class Histogram {
   }
 
   /* Merge two histogram data together */
-  void merge(const Histogram &hist) {
+  void merge(const Histogram& hist) {
     // the two histogram bucket definitions must match to support
     // a merge.
-    if (getBucketSize() != hist.getBucketSize() ||
-        getMin() != hist.getMin() ||
-        getMax() != hist.getMax() ||
-        getNumBuckets() != hist.getNumBuckets() ) {
+    if (getBucketSize() != hist.getBucketSize() || getMin() != hist.getMin() ||
+        getMax() != hist.getMax() || getNumBuckets() != hist.getNumBuckets()) {
       throw std::invalid_argument("Cannot merge from input histogram.");
     }
 
@@ -344,12 +344,10 @@ class Histogram {
   }
 
   /* Copy bucket values from another histogram */
-  void copy(const Histogram &hist) {
+  void copy(const Histogram& hist) {
     // the two histogram bucket definition must match
-    if (getBucketSize() != hist.getBucketSize() ||
-        getMin() != hist.getMin() ||
-        getMax() != hist.getMax() ||
-        getNumBuckets() != hist.getNumBuckets() ) {
+    if (getBucketSize() != hist.getBucketSize() || getMin() != hist.getMin() ||
+        getMax() != hist.getMax() || getNumBuckets() != hist.getNumBuckets()) {
       throw std::invalid_argument("Cannot copy from input histogram.");
     }
 
@@ -416,7 +414,7 @@ class Histogram {
    * Get the bucket that the specified percentile falls into
    *
    * The lowest and highest percentile data points in returned bucket will be
-   * returned in the lowPct and highPct arguments, if they are non-NULL.
+   * returned in the lowPct and highPct arguments, if they are not nullptr.
    */
   size_t getPercentileBucketIdx(
       double pct,

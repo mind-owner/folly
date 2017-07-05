@@ -56,8 +56,8 @@
 #include <folly/detail/RangeSse42.h>
 
 // Ignore shadowing warnings within this file, so includers can use -Wshadow.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wshadow"
+FOLLY_PUSH_WARNING
+FOLLY_GCC_DISABLE_WARNING("-Wshadow")
 
 namespace folly {
 
@@ -206,7 +206,9 @@ public:
   constexpr Range(Iter start, size_t size)
       : b_(start), e_(start + size) { }
 
+# if !__clang__ || __CLANG_PREREQ(3, 7) // Clang 3.6 crashes on this line
   /* implicit */ Range(std::nullptr_t) = delete;
+# endif
 
   template <class T = Iter, typename detail::IsCharPointer<T>::type = 0>
   constexpr /* implicit */ Range(Iter str)
@@ -358,6 +360,9 @@ public:
 
   Range& operator=(const Range& rhs) & = default;
   Range& operator=(Range&& rhs) & = default;
+
+  template <class T = Iter, typename detail::IsCharPointer<T>::const_type = 0>
+  Range& operator=(std::string&& rhs) = delete;
 
   void clear() {
     b_ = Iter();
@@ -687,6 +692,12 @@ public:
     auto const trunc = subpiece(size() - other.size());
     return std::equal(
         trunc.begin(), trunc.end(), other.begin(), std::forward<Comp>(eq));
+  }
+
+  template <class Comp>
+  bool equals(const const_range_type& other, Comp&& eq) const {
+    return size() == other.size() &&
+        std::equal(begin(), end(), other.begin(), std::forward<Comp>(eq));
   }
 
   /**
@@ -1265,6 +1276,6 @@ template <class T> struct IsSomeString {
 
 }  // !namespace folly
 
-#pragma GCC diagnostic pop
+FOLLY_POP_WARNING
 
 FOLLY_ASSUME_FBVECTOR_COMPATIBLE_1(folly::Range);

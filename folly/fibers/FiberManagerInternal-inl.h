@@ -25,11 +25,11 @@
 #ifdef __APPLE__
 #include <folly/ThreadLocal.h>
 #endif
+#include <folly/Try.h>
 #include <folly/fibers/Baton.h>
 #include <folly/fibers/Fiber.h>
 #include <folly/fibers/LoopController.h>
 #include <folly/fibers/Promise.h>
-#include <folly/Try.h>
 
 namespace folly {
 namespace fibers {
@@ -313,10 +313,10 @@ void FiberManager::addTaskRemote(F&& func) {
     auto currentFm = getFiberManagerUnsafe();
     if (currentFm && currentFm->currentFiber_ &&
         currentFm->localType_ == localType_) {
-      return folly::make_unique<RemoteTask>(
+      return std::make_unique<RemoteTask>(
           std::forward<F>(func), currentFm->currentFiber_->localData_);
     }
-    return folly::make_unique<RemoteTask>(std::forward<F>(func));
+    return std::make_unique<RemoteTask>(std::forward<F>(func));
   }();
   auto insertHead = [&]() {
     return remoteTaskQueue_.insertHead(task.release());

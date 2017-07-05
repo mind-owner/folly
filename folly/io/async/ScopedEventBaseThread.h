@@ -19,11 +19,15 @@
 #include <memory>
 #include <thread>
 
+#include <folly/Baton.h>
 #include <folly/io/async/EventBase.h>
 
 namespace folly {
 
 class EventBaseManager;
+template <class Iter>
+class Range;
+typedef Range<const char*> StringPiece;
 
 /**
  * A helper class to start a new thread running a EventBase loop.
@@ -35,7 +39,11 @@ class EventBaseManager;
 class ScopedEventBaseThread {
  public:
   ScopedEventBaseThread();
+  explicit ScopedEventBaseThread(const StringPiece& name);
   explicit ScopedEventBaseThread(EventBaseManager* ebm);
+  explicit ScopedEventBaseThread(
+      EventBaseManager* ebm,
+      const StringPiece& name);
   ~ScopedEventBaseThread();
 
   EventBase* getEventBase() const {
@@ -58,6 +66,7 @@ class ScopedEventBaseThread {
     mutable EventBase eb_;
   };
   std::thread th_;
+  folly::Baton<> stop_;
 };
 
 }

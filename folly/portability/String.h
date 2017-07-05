@@ -16,10 +16,14 @@
 
 #pragma once
 
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <folly/portability/Config.h>
+
+#if !defined(_WIN32)
+#include <strings.h>
+#endif
 
 #if !FOLLY_HAVE_MEMRCHR
 extern "C" void* memrchr(const void* s, int c, size_t n);

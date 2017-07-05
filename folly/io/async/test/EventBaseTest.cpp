@@ -1,23 +1,19 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright 2004-present Facebook, Inc.
  *
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements. See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership. The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License. You may obtain a copy of the License at
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
  *   http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 #include <folly/Memory.h>
 #include <folly/ScopeGuard.h>
 
@@ -1189,7 +1185,7 @@ TEST(EventBaseTest, RunInEventBaseThreadAndWait) {
   vector<unique_ptr<atomic<size_t>>> atoms(c);
   for (size_t i = 0; i < c; ++i) {
     auto& atom = atoms.at(i);
-    atom = make_unique<atomic<size_t>>(0);
+    atom = std::make_unique<atomic<size_t>>(0);
   }
   vector<thread> threads;
   for (size_t i = 0; i < c; ++i) {
@@ -1349,6 +1345,21 @@ TEST(EventBaseTest, RunInLoopStopLoop) {
   // this a hard API requirement.)
   ASSERT_GE(c1.getCount(), 10);
   ASSERT_LE(c1.getCount(), 11);
+}
+
+TEST(EventBaseTest, messageAvailableException) {
+  auto deadManWalking = [] {
+    EventBase eventBase;
+    std::thread t([&] {
+      // Call this from another thread to force use of NotificationQueue in
+      // runInEventBaseThread
+      eventBase.runInEventBaseThread(
+          []() { throw std::runtime_error("boom"); });
+    });
+    t.join();
+    eventBase.loopForever();
+  };
+  EXPECT_DEATH(deadManWalking(), ".*");
 }
 
 TEST(EventBaseTest, TryRunningAfterTerminate) {
@@ -1651,7 +1662,7 @@ TEST(EventBaseTest, EventBaseThreadLoop) {
   });
   base.loop();
 
-  ASSERT_EQ(true, ran);
+  ASSERT_TRUE(ran);
 }
 
 TEST(EventBaseTest, EventBaseThreadName) {
@@ -1774,7 +1785,7 @@ TEST(EventBaseTest, LoopKeepAliveInLoop) {
 }
 
 TEST(EventBaseTest, LoopKeepAliveWithLoopForever) {
-  std::unique_ptr<EventBase> evb = folly::make_unique<EventBase>();
+  std::unique_ptr<EventBase> evb = std::make_unique<EventBase>();
 
   bool done = false;
 
@@ -1794,7 +1805,7 @@ TEST(EventBaseTest, LoopKeepAliveWithLoopForever) {
     /* sleep override */
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
     ASSERT_FALSE(done) << "Loop terminated early";
-    ev->runInEventBaseThread([&ev, keepAlive = std::move(keepAlive) ]{});
+    ev->runInEventBaseThread([keepAlive = std::move(keepAlive)]{});
   }
 
   evThread.join();
@@ -1802,7 +1813,7 @@ TEST(EventBaseTest, LoopKeepAliveWithLoopForever) {
 }
 
 TEST(EventBaseTest, LoopKeepAliveShutdown) {
-  auto evb = folly::make_unique<EventBase>();
+  auto evb = std::make_unique<EventBase>();
 
   bool done = false;
 
@@ -1825,7 +1836,7 @@ TEST(EventBaseTest, LoopKeepAliveShutdown) {
 }
 
 TEST(EventBaseTest, LoopKeepAliveAtomic) {
-  auto evb = folly::make_unique<EventBase>();
+  auto evb = std::make_unique<EventBase>();
 
   static constexpr size_t kNumThreads = 100;
   static constexpr size_t kNumTasks = 100;
@@ -1835,7 +1846,7 @@ TEST(EventBaseTest, LoopKeepAliveAtomic) {
   size_t done{0};
 
   for (size_t i = 0; i < kNumThreads; ++i) {
-    batons.emplace_back(folly::make_unique<Baton<>>());
+    batons.emplace_back(std::make_unique<Baton<>>());
   }
 
   for (size_t i = 0; i < kNumThreads; ++i) {

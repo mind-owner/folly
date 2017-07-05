@@ -1,21 +1,19 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements. See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership. The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License. You may obtain a copy of the License at
+ * Copyright 2004-present Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
  *   http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing,
- * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
- * KIND, either express or implied. See the License for the
- * specific language governing permissions and limitations
- * under the License.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
+
 #include <thread>
 
 #include <folly/Memory.h>
@@ -56,8 +54,7 @@ TEST(RequestContext, SimpleTest) {
 
   EXPECT_EQ(nullptr, RequestContext::get()->getContextData("test"));
 
-  RequestContext::get()->setContextData(
-      "test", folly::make_unique<TestData>(10));
+  RequestContext::get()->setContextData("test", std::make_unique<TestData>(10));
   base.runInEventBaseThread([&](){
       EXPECT_TRUE(RequestContext::get() != nullptr);
       auto data = dynamic_cast<TestData*>(
@@ -83,16 +80,15 @@ TEST(RequestContext, SimpleTest) {
 TEST(RequestContext, setIfAbsentTest) {
   EXPECT_TRUE(RequestContext::get() != nullptr);
 
-  RequestContext::get()->setContextData(
-      "test", folly::make_unique<TestData>(10));
+  RequestContext::get()->setContextData("test", std::make_unique<TestData>(10));
   EXPECT_FALSE(RequestContext::get()->setContextDataIfAbsent(
-      "test", folly::make_unique<TestData>(20)));
+      "test", std::make_unique<TestData>(20)));
   EXPECT_EQ(10,
             dynamic_cast<TestData*>(
                 RequestContext::get()->getContextData("test"))->data_);
 
   EXPECT_TRUE(RequestContext::get()->setContextDataIfAbsent(
-      "test2", folly::make_unique<TestData>(20)));
+      "test2", std::make_unique<TestData>(20)));
   EXPECT_EQ(20,
             dynamic_cast<TestData*>(
                 RequestContext::get()->getContextData("test2"))->data_);
@@ -104,13 +100,13 @@ TEST(RequestContext, setIfAbsentTest) {
 TEST(RequestContext, testSetUnset) {
   RequestContext::create();
   auto ctx1 = RequestContext::saveContext();
-  ctx1->setContextData("test", folly::make_unique<TestData>(10));
+  ctx1->setContextData("test", std::make_unique<TestData>(10));
   auto testData1 = dynamic_cast<TestData*>(ctx1->getContextData("test"));
 
   // Override RequestContext
   RequestContext::create();
   auto ctx2 = RequestContext::saveContext();
-  ctx2->setContextData("test", folly::make_unique<TestData>(20));
+  ctx2->setContextData("test", std::make_unique<TestData>(20));
   auto testData2 = dynamic_cast<TestData*>(ctx2->getContextData("test"));
 
   // Check ctx1->onUnset was called
@@ -135,9 +131,9 @@ TEST(RequestContext, deadlockTest) {
    public:
     explicit DeadlockTestData(const std::string& val) : val_(val) {}
 
-    virtual ~DeadlockTestData() {
+    ~DeadlockTestData() override {
       RequestContext::get()->setContextData(
-          val_, folly::make_unique<TestData>(1));
+          val_, std::make_unique<TestData>(1));
     }
 
     void onSet() override {}
@@ -148,6 +144,6 @@ TEST(RequestContext, deadlockTest) {
   };
 
   RequestContext::get()->setContextData(
-      "test", folly::make_unique<DeadlockTestData>("test2"));
+      "test", std::make_unique<DeadlockTestData>("test2"));
   RequestContext::get()->clearContextData("test");
 }

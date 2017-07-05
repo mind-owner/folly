@@ -28,7 +28,7 @@
 #include <folly/portability/Fcntl.h>
 
 #ifdef _WIN32
-#include <crtdbg.h>
+#include <crtdbg.h> // @manual
 #endif
 
 namespace folly {
@@ -102,7 +102,7 @@ TemporaryDirectory::TemporaryDirectory(
     fs::path dir,
     Scope scope)
     : scope_(scope),
-      path_(folly::make_unique<fs::path>(
+      path_(std::make_unique<fs::path>(
           generateUniquePath(std::move(dir), namePrefix))) {
   fs::create_directory(path());
 }

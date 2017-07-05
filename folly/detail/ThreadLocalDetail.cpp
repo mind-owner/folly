@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <folly/ThreadLocal.h>
+#include <folly/detail/ThreadLocalDetail.h>
 
 #include <list>
 #include <mutex>
@@ -45,7 +45,7 @@ void StaticMetaBase::onThreadExit(void* ptr) {
   };
 
   {
-    SharedMutex::ReadHolder rlock;
+    SharedMutex::ReadHolder rlock(nullptr);
     if (meta.strict_) {
       rlock = SharedMutex::ReadHolder(meta.accessAllThreadsLock_);
     }
@@ -103,7 +103,7 @@ void StaticMetaBase::destroy(EntryID* ent) {
     std::vector<ElementWrapper> elements;
 
     {
-      SharedMutex::WriteHolder wlock;
+      SharedMutex::WriteHolder wlock(nullptr);
       if (meta.strict_) {
         /*
          * In strict mode, the logic guarantees per-thread instances are

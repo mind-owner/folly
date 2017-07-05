@@ -21,12 +21,12 @@
 #include <folly/Malloc.h>
 #include <folly/Portability.h>
 #include <folly/ScopeGuard.h>
-#include <folly/detail/CacheLocality.h>
+#include <folly/concurrency/CacheLocality.h>
+#include <folly/portability/PThread.h>
 #include <folly/portability/SysMman.h>
 #include <folly/portability/Unistd.h>
 
 #include <limits.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <utility>

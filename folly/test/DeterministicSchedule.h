@@ -16,17 +16,10 @@
 
 #pragma once
 
-// This needs to be above semaphore.h due to the windows
-// libevent implementation needing mode_t to be defined,
-// but defining it differently than our portability
-// headers do.
-#include <folly/portability/SysTypes.h>
-
 #include <assert.h>
 #include <boost/noncopyable.hpp>
 #include <errno.h>
 #include <glog/logging.h>
-#include <semaphore.h>
 #include <atomic>
 #include <functional>
 #include <mutex>
@@ -35,8 +28,10 @@
 #include <vector>
 
 #include <folly/ScopeGuard.h>
-#include <folly/detail/CacheLocality.h>
+#include <folly/concurrency/CacheLocality.h>
+#include <folly/detail/AtomicUtils.h>
 #include <folly/detail/Futex.h>
+#include <folly/portability/Semaphore.h>
 
 namespace folly {
 namespace test {
@@ -231,10 +226,20 @@ struct DeterministicAtomic {
   bool is_lock_free() const noexcept { return data.is_lock_free(); }
 
   bool compare_exchange_strong(
-      T& v0, T v1, std::memory_order mo = std::memory_order_seq_cst) noexcept {
+      T& v0,
+      T v1,
+      std::memory_order mo = std::memory_order_seq_cst) noexcept {
+    return compare_exchange_strong(
+        v0, v1, mo, detail::default_failure_memory_order(mo));
+  }
+  bool compare_exchange_strong(
+      T& v0,
+      T v1,
+      std::memory_order success,
+      std::memory_order failure) noexcept {
     DeterministicSchedule::beforeSharedAccess();
     auto orig = v0;
-    bool rv = data.compare_exchange_strong(v0, v1, mo);
+    bool rv = data.compare_exchange_strong(v0, v1, success, failure);
     FOLLY_TEST_DSCHED_VLOG(this << ".compare_exchange_strong(" << std::hex
                                 << orig << ", " << std::hex << v1 << ") -> "
                                 << rv << "," << std::hex << v0);
@@ -243,10 +248,20 @@ struct DeterministicAtomic {
   }
 
   bool compare_exchange_weak(
-      T& v0, T v1, std::memory_order mo = std::memory_order_seq_cst) noexcept {
+      T& v0,
+      T v1,
+      std::memory_order mo = std::memory_order_seq_cst) noexcept {
+    return compare_exchange_weak(
+        v0, v1, mo, detail::default_failure_memory_order(mo));
+  }
+  bool compare_exchange_weak(
+      T& v0,
+      T v1,
+      std::memory_order success,
+      std::memory_order failure) noexcept {
     DeterministicSchedule::beforeSharedAccess();
     auto orig = v0;
-    bool rv = data.compare_exchange_weak(v0, v1, mo);
+    bool rv = data.compare_exchange_weak(v0, v1, success, failure);
     FOLLY_TEST_DSCHED_VLOG(this << ".compare_exchange_weak(" << std::hex << orig
                                 << ", " << std::hex << v1 << ") -> " << rv
                                 << "," << std::hex << v0);
@@ -484,8 +499,9 @@ FutexResult Futex<test::DeterministicAtomic>::futexWaitImpl(
     std::chrono::time_point<std::chrono::system_clock>* absSystemTime,
     std::chrono::time_point<std::chrono::steady_clock>* absSteadyTime,
     uint32_t waitMask);
+}
 
 template <>
 Getcpu::Func AccessSpreader<test::DeterministicAtomic>::pickGetcpuFunc();
-}
+
 } // namespace folly::detail

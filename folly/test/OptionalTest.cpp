@@ -15,6 +15,7 @@
  */
 
 #include <folly/Optional.h>
+#include <folly/Portability.h>
 #include <folly/portability/GTest.h>
 
 #include <algorithm>
@@ -192,6 +193,21 @@ TEST(Optional, EmptyConstruct) {
   EXPECT_FALSE(bool(test1));
   Optional<int> test2(std::move(opt));
   EXPECT_FALSE(bool(test2));
+}
+
+TEST(Optional, InPlaceConstruct) {
+  using A = std::pair<int, double>;
+  Optional<A> opt(in_place, 5, 3.2);
+  EXPECT_TRUE(bool(opt));
+  EXPECT_EQ(5, opt->first);
+}
+
+TEST(Optional, InPlaceNestedConstruct) {
+  using A = std::pair<int, double>;
+  Optional<Optional<A>> opt(in_place, in_place, 5, 3.2);
+  EXPECT_TRUE(bool(opt));
+  EXPECT_TRUE(bool(*opt));
+  EXPECT_EQ(5, (*opt)->first);
 }
 
 TEST(Optional, Unique) {
@@ -372,6 +388,67 @@ TEST(Optional, Comparisons) {
   EXPECT_FALSE(bob != false);
 }
 
+TEST(Optional, HeterogeneousComparisons) {
+  using opt8 = Optional<uint8_t>;
+  using opt64 = Optional<uint64_t>;
+
+  EXPECT_TRUE(opt8(4) == uint64_t(4));
+  EXPECT_FALSE(opt8(8) == uint64_t(4));
+  EXPECT_FALSE(opt8() == uint64_t(4));
+
+  EXPECT_TRUE(uint64_t(4) == opt8(4));
+  EXPECT_FALSE(uint64_t(4) == opt8(8));
+  EXPECT_FALSE(uint64_t(4) == opt8());
+
+  EXPECT_FALSE(opt8(4) != uint64_t(4));
+  EXPECT_TRUE(opt8(8) != uint64_t(4));
+  EXPECT_TRUE(opt8() != uint64_t(4));
+
+  EXPECT_FALSE(uint64_t(4) != opt8(4));
+  EXPECT_TRUE(uint64_t(4) != opt8(8));
+  EXPECT_TRUE(uint64_t(4) != opt8());
+
+  EXPECT_TRUE(opt8() == opt64());
+  EXPECT_TRUE(opt8(4) == opt64(4));
+  EXPECT_FALSE(opt8(8) == opt64(4));
+  EXPECT_FALSE(opt8() == opt64(4));
+  EXPECT_FALSE(opt8(4) == opt64());
+
+  EXPECT_FALSE(opt8() != opt64());
+  EXPECT_FALSE(opt8(4) != opt64(4));
+  EXPECT_TRUE(opt8(8) != opt64(4));
+  EXPECT_TRUE(opt8() != opt64(4));
+  EXPECT_TRUE(opt8(4) != opt64());
+
+  EXPECT_TRUE(opt8() < opt64(4));
+  EXPECT_TRUE(opt8(4) < opt64(8));
+  EXPECT_FALSE(opt8() < opt64());
+  EXPECT_FALSE(opt8(4) < opt64(4));
+  EXPECT_FALSE(opt8(8) < opt64(4));
+  EXPECT_FALSE(opt8(4) < opt64());
+
+  EXPECT_FALSE(opt8() > opt64(4));
+  EXPECT_FALSE(opt8(4) > opt64(8));
+  EXPECT_FALSE(opt8() > opt64());
+  EXPECT_FALSE(opt8(4) > opt64(4));
+  EXPECT_TRUE(opt8(8) > opt64(4));
+  EXPECT_TRUE(opt8(4) > opt64());
+
+  EXPECT_TRUE(opt8() <= opt64(4));
+  EXPECT_TRUE(opt8(4) <= opt64(8));
+  EXPECT_TRUE(opt8() <= opt64());
+  EXPECT_TRUE(opt8(4) <= opt64(4));
+  EXPECT_FALSE(opt8(8) <= opt64(4));
+  EXPECT_FALSE(opt8(4) <= opt64());
+
+  EXPECT_FALSE(opt8() >= opt64(4));
+  EXPECT_FALSE(opt8(4) >= opt64(8));
+  EXPECT_TRUE(opt8() >= opt64());
+  EXPECT_TRUE(opt8(4) >= opt64(4));
+  EXPECT_TRUE(opt8(8) >= opt64(4));
+  EXPECT_TRUE(opt8(4) >= opt64());
+}
+
 TEST(Optional, Conversions) {
   Optional<bool> mbool;
   Optional<short> mshort;
@@ -459,7 +536,7 @@ TEST(Optional, MakeOptional) {
   EXPECT_EQ(**optIntPtr, 3);
 }
 
-#if __clang__
+#if __CLANG_PREREQ(3, 6)
 # pragma clang diagnostic push
 # pragma clang diagnostic ignored "-Wself-move"
 #endif
@@ -474,7 +551,7 @@ TEST(Optional, SelfAssignment) {
   ASSERT_TRUE(b.hasValue() && b.value() == 23333333);
 }
 
-#if __clang__
+#if __CLANG_PREREQ(3, 6)
 # pragma clang diagnostic pop
 #endif
 

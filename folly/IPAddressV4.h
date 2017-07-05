@@ -54,6 +54,10 @@ typedef std::array<uint8_t, 4> ByteArray4;
  */
 class IPAddressV4 {
  public:
+  // Max size of std::string returned by toFullyQualified.
+  static constexpr size_t kMaxToFullyQualifiedSize =
+      4 /*words*/ * 3 /*max chars per word*/ + 3 /*separators*/;
+
   // returns true iff the input string can be parsed as an ipv4-address
   static bool validate(StringPiece ip);
 
@@ -78,6 +82,13 @@ class IPAddressV4 {
   ByteRange toBinary() const {
     return ByteRange((const unsigned char *) &addr_.inAddr_.s_addr, 4);
   }
+
+  /**
+   * Create a new IPAddress instance from the in-addr.arpa representation.
+   * @throws IPAddressFormatException if the input is not a valid in-addr.arpa
+   * representation
+   */
+  static IPAddressV4 fromInverseArpaName(const std::string& arpaname);
 
   /**
    * Convert a IPv4 address string to a long in network byte order.
@@ -183,6 +194,8 @@ class IPAddressV4 {
   // @see IPAddress#str
   std::string str() const;
 
+  std::string toInverseArpaName() const;
+
   // return underlying in_addr structure
   in_addr toAddr() const { return addr_.inAddr_; }
 
@@ -202,6 +215,9 @@ class IPAddressV4 {
 
   // @see IPAddress#toFullyQualified
   std::string toFullyQualified() const { return str(); }
+
+  // @see IPAddress#toFullyQualifiedAppend
+  void toFullyQualifiedAppend(std::string& out) const;
 
   // @see IPAddress#version
   uint8_t version() const { return 4; }

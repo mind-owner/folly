@@ -335,9 +335,8 @@ class ThreadExecutor : public Executor {
 
 TEST(Via, viaThenGetWasRacy) {
   ThreadExecutor x;
-  std::unique_ptr<int> val = folly::via(&x)
-    .then([] { return folly::make_unique<int>(42); })
-    .get();
+  std::unique_ptr<int> val =
+      folly::via(&x).then([] { return std::make_unique<int>(42); }).get();
   ASSERT_TRUE(!!val);
   EXPECT_EQ(42, *val);
 }
@@ -472,6 +471,86 @@ TEST(Via, viaRaces) {
   t2.join();
 }
 
+TEST(Via, viaDummyExecutorFutureSetValueFirst) {
+  // The callback object will get destroyed when passed to the executor.
+
+  // A promise will be captured by the callback lambda so we can observe that
+  // it will be destroyed.
+  Promise<Unit> captured_promise;
+  auto captured_promise_future = captured_promise.getFuture();
+
+  DummyDrivableExecutor x;
+  auto future = makeFuture().via(&x).then(
+      [c = std::move(captured_promise)] { return 42; });
+
+  EXPECT_THROW(future.get(std::chrono::seconds(5)), BrokenPromise);
+  EXPECT_THROW(
+      captured_promise_future.get(std::chrono::seconds(5)), BrokenPromise);
+}
+
+TEST(Via, viaDummyExecutorFutureSetCallbackFirst) {
+  // The callback object will get destroyed when passed to the executor.
+
+  // A promise will be captured by the callback lambda so we can observe that
+  // it will be destroyed.
+  Promise<Unit> captured_promise;
+  auto captured_promise_future = captured_promise.getFuture();
+
+  DummyDrivableExecutor x;
+  Promise<Unit> trigger;
+  auto future = trigger.getFuture().via(&x).then(
+      [c = std::move(captured_promise)] { return 42; });
+  trigger.setValue();
+
+  EXPECT_THROW(future.get(std::chrono::seconds(5)), BrokenPromise);
+  EXPECT_THROW(
+      captured_promise_future.get(std::chrono::seconds(5)), BrokenPromise);
+}
+
+TEST(Via, viaExecutorDiscardsTaskFutureSetValueFirst) {
+  // The callback object will get destroyed when the ManualExecutor runs out
+  // of scope.
+
+  // A promise will be captured by the callback lambda so we can observe that
+  // it will be destroyed.
+  Promise<Unit> captured_promise;
+  auto captured_promise_future = captured_promise.getFuture();
+
+  Optional<Future<int>> future;
+  {
+    ManualExecutor x;
+    future = makeFuture().via(&x).then(
+        [c = std::move(captured_promise)] { return 42; });
+  }
+
+  EXPECT_THROW(future->get(std::chrono::seconds(5)), BrokenPromise);
+  EXPECT_THROW(
+      captured_promise_future.get(std::chrono::seconds(5)), BrokenPromise);
+}
+
+TEST(Via, viaExecutorDiscardsTaskFutureSetCallbackFirst) {
+  // The callback object will get destroyed when the ManualExecutor runs out
+  // of scope.
+
+  // A promise will be captured by the callback lambda so we can observe that
+  // it will be destroyed.
+  Promise<Unit> captured_promise;
+  auto captured_promise_future = captured_promise.getFuture();
+
+  Optional<Future<int>> future;
+  {
+    ManualExecutor x;
+    Promise<Unit> trigger;
+    future = trigger.getFuture().via(&x).then(
+        [c = std::move(captured_promise)] { return 42; });
+    trigger.setValue();
+  }
+
+  EXPECT_THROW(future->get(std::chrono::seconds(5)), BrokenPromise);
+  EXPECT_THROW(
+      captured_promise_future.get(std::chrono::seconds(5)), BrokenPromise);
+}
+
 TEST(ViaFunc, liftsVoid) {
   ManualExecutor x;
   int count = 0;
@@ -523,7 +602,7 @@ TEST(ViaFunc, isSticky) {
 
 TEST(ViaFunc, moveOnly) {
   ManualExecutor x;
-  auto intp = folly::make_unique<int>(42);
+  auto intp = std::make_unique<int>(42);
 
   EXPECT_EQ(42, via(&x, [intp = std::move(intp)] { return *intp; }).getVia(&x));
 }

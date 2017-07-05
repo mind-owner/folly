@@ -48,7 +48,8 @@
  * Appender with a buffer chain; for this reason, Appenders assume private
  * access to the buffer (you need to call unshare() yourself if necessary).
  **/
-namespace folly { namespace io {
+namespace folly {
+namespace io {
 
 namespace detail {
 
@@ -200,14 +201,36 @@ class CursorBase {
   }
 
   template <class T>
-  typename std::enable_if<std::is_arithmetic<T>::value, T>::type read() {
-    T val;
+  typename std::enable_if<std::is_arithmetic<T>::value, bool>::type tryRead(
+      T& val) {
     if (LIKELY(length() >= sizeof(T))) {
       val = loadUnaligned<T>(data());
       offset_ += sizeof(T);
       advanceBufferIfEmpty();
-    } else {
-      pullSlow(&val, sizeof(T));
+      return true;
+    }
+    return pullAtMostSlow(&val, sizeof(T)) == sizeof(T);
+  }
+
+  template <class T>
+  bool tryReadBE(T& val) {
+    const bool result = tryRead(val);
+    val = Endian::big(val);
+    return result;
+  }
+
+  template <class T>
+  bool tryReadLE(T& val) {
+    const bool result = tryRead(val);
+    val = Endian::little(val);
+    return result;
+  }
+
+  template <class T>
+  T read() {
+    T val{};
+    if (!tryRead(val)) {
+      std::__throw_out_of_range("underflow");
     }
     return val;
   }
@@ -417,7 +440,7 @@ class CursorBase {
 
   size_t cloneAtMost(std::unique_ptr<folly::IOBuf>& buf, size_t len) {
     if (!buf) {
-      buf = make_unique<folly::IOBuf>();
+      buf = std::make_unique<folly::IOBuf>();
     }
     return cloneAtMost(*buf, len);
   }
@@ -596,7 +619,7 @@ class CursorBase {
   BufType* buffer_;
 };
 
-}  // namespace detail
+} // namespace detail
 
 class Cursor : public detail::CursorBase<Cursor, const IOBuf> {
  public:
@@ -734,6 +757,14 @@ class RWCursor
 
   using detail::Writable<RWCursor<access>>::pushAtMost;
   size_t pushAtMost(const uint8_t* buf, size_t len) {
+    // We have to explicitly check for an input length of 0.
+    // We support buf being nullptr in this case, but we need to avoid calling
+    // memcpy() with a null source pointer, since that is undefined behavior
+    // even if the length is 0.
+    if (len == 0) {
+      return 0;
+    }
+
     size_t copied = 0;
     for (;;) {
       // Fast path: the current buffer is big enough.
@@ -862,6 +893,14 @@ class Appender : public detail::Writable<Appender> {
 
   using detail::Writable<Appender>::pushAtMost;
   size_t pushAtMost(const uint8_t* buf, size_t len) {
+    // We have to explicitly check for an input length of 0.
+    // We support buf being nullptr in this case, but we need to avoid calling
+    // memcpy() with a null source pointer, since that is undefined behavior
+    // even if the length is 0.
+    if (len == 0) {
+      return 0;
+    }
+
     size_t copied = 0;
     for (;;) {
       // Fast path: it all fits in one buffer.
@@ -975,7 +1014,15 @@ class QueueAppender : public detail::Writable<QueueAppender> {
 
   using detail::Writable<QueueAppender>::pushAtMost;
   size_t pushAtMost(const uint8_t* buf, size_t len) {
-    size_t remaining = len;
+    // Fill the current buffer
+    const size_t copyLength = std::min(len, length());
+    if (copyLength != 0) {
+      memcpy(writableData(), buf, copyLength);
+      append(copyLength);
+      buf += copyLength;
+    }
+    // Allocate more buffers as necessary
+    size_t remaining = len - copyLength;
     while (remaining != 0) {
       auto p = queue_->preallocate(std::min(remaining, growth_),
                                    growth_,
@@ -1003,7 +1050,7 @@ class QueueAppender : public detail::Writable<QueueAppender> {
   folly::IOBufQueue* queue_;
   size_t growth_;
 };
-
-}}  // folly::io
+} // namespace io
+} // namespace folly
 
 #include <folly/io/Cursor-inl.h>

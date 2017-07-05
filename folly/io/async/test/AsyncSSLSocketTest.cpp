@@ -15,9 +15,8 @@
  */
 #include <folly/io/async/test/AsyncSSLSocketTest.h>
 
-#include <signal.h>
-
 #include <folly/SocketAddress.h>
+#include <folly/io/Cursor.h>
 #include <folly/io/async/AsyncSSLSocket.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
@@ -29,10 +28,10 @@
 #include <folly/io/async/test/BlockingSocket.h>
 
 #include <fcntl.h>
-#include <folly/io/Cursor.h>
-#include <openssl/bio.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
+
 #include <fstream>
 #include <iostream>
 #include <list>
@@ -182,7 +181,7 @@ TEST(AsyncSSLSocketTest, ReadAfterClose) {
   ReadEOFCallback readCallback(&writeCallback);
   HandshakeCallback handshakeCallback(&readCallback);
   SSLServerAcceptCallback acceptCallback(&handshakeCallback);
-  auto server = folly::make_unique<TestSSLServer>(&acceptCallback);
+  auto server = std::make_unique<TestSSLServer>(&acceptCallback);
 
   // Set up SSL context.
   auto sslContext = std::make_shared<SSLContext>();
@@ -403,13 +402,14 @@ class NextProtocolTest : public testing::TestWithParam<NextProtocolTypePair> {
       new AsyncSSLSocket(clientCtx, &eventBase, fds[0], false));
     AsyncSSLSocket::UniquePtr serverSock(
       new AsyncSSLSocket(serverCtx, &eventBase, fds[1], true));
-    client = folly::make_unique<NpnClient>(std::move(clientSock));
-    server = folly::make_unique<NpnServer>(std::move(serverSock));
+    client = std::make_unique<NpnClient>(std::move(clientSock));
+    server = std::make_unique<NpnServer>(std::move(serverSock));
 
     eventBase.loop();
   }
 
   void expectProtocol(const std::string& proto) {
+    expectHandshakeSuccess();
     EXPECT_NE(client->nextProtoLength, 0);
     EXPECT_EQ(client->nextProtoLength, server->nextProtoLength);
     EXPECT_EQ(
@@ -420,6 +420,7 @@ class NextProtocolTest : public testing::TestWithParam<NextProtocolTypePair> {
   }
 
   void expectNoProtocol() {
+    expectHandshakeSuccess();
     EXPECT_EQ(client->nextProtoLength, 0);
     EXPECT_EQ(server->nextProtoLength, 0);
     EXPECT_EQ(client->nextProto, nullptr);
@@ -427,6 +428,7 @@ class NextProtocolTest : public testing::TestWithParam<NextProtocolTypePair> {
   }
 
   void expectProtocolType() {
+    expectHandshakeSuccess();
     if (GetParam().first == SSLContext::NextProtocolType::ANY &&
         GetParam().second == SSLContext::NextProtocolType::ANY) {
       EXPECT_EQ(client->protocolType, server->protocolType);
@@ -439,8 +441,23 @@ class NextProtocolTest : public testing::TestWithParam<NextProtocolTypePair> {
   }
 
   void expectProtocolType(NextProtocolTypePair expected) {
+    expectHandshakeSuccess();
     EXPECT_EQ(client->protocolType, expected.first);
     EXPECT_EQ(server->protocolType, expected.second);
+  }
+
+  void expectHandshakeSuccess() {
+    EXPECT_FALSE(client->except.hasValue())
+        << "client handshake error: " << client->except->what();
+    EXPECT_FALSE(server->except.hasValue())
+        << "server handshake error: " << server->except->what();
+  }
+
+  void expectHandshakeError() {
+    EXPECT_TRUE(client->except.hasValue())
+        << "Expected client handshake error!";
+    EXPECT_TRUE(server->except.hasValue())
+        << "Expected server handshake error!";
   }
 
   EventBase eventBase;
@@ -506,27 +523,32 @@ TEST_P(NextProtocolTest, NpnTestNoOverlap) {
   clientCtx->setAdvertisedNextProtocols({"blub"}, GetParam().first);
   serverCtx->setAdvertisedNextProtocols({"foo", "bar", "baz"},
                                         GetParam().second);
-
   connect();
 
   if (GetParam().first == SSLContext::NextProtocolType::ALPN ||
       GetParam().second == SSLContext::NextProtocolType::ALPN) {
     // This is arguably incorrect behavior since RFC7301 states an ALPN protocol
-    // mismatch should result in a fatal alert, but this is OpenSSL's current
-    // behavior and we want to know if it changes.
+    // mismatch should result in a fatal alert, but this is the current behavior
+    // on all OpenSSL versions/variants, and we want to know if it changes.
     expectNoProtocol();
   }
-#if defined(OPENSSL_IS_BORINGSSL)
-  // BoringSSL also doesn't fatal on mismatch but behaves slightly differently
-  // from OpenSSL 1.0.2h+ - it doesn't select a protocol if both ends support
-  // NPN *and* ALPN
+#if FOLLY_OPENSSL_IS_110 || defined(OPENSSL_IS_BORINGSSL)
   else if (
       GetParam().first == SSLContext::NextProtocolType::ANY &&
       GetParam().second == SSLContext::NextProtocolType::ANY) {
+# if FOLLY_OPENSSL_IS_110
+    // OpenSSL 1.1.0 sends a fatal alert on mismatch, which is probavbly the
+    // correct behavior per RFC7301
+    expectHandshakeError();
+# else
+    // BoringSSL also doesn't fatal on mismatch but behaves slightly differently
+    // from OpenSSL 1.0.2h+ - it doesn't select a protocol if both ends support
+    // NPN *and* ALPN
     expectNoProtocol();
+# endif
   }
 #endif
-  else {
+   else {
     expectProtocol("blub");
     expectProtocolType(
         {SSLContext::NextProtocolType::NPN, SSLContext::NextProtocolType::NPN});
@@ -1611,6 +1633,37 @@ TEST(AsyncSSLSocketTest, UnencryptedTest) {
   EXPECT_EQ(AsyncSSLSocket::STATE_ESTABLISHED, client->getSSLState());
 }
 
+TEST(AsyncSSLSocketTest, ConnectUnencryptedTest) {
+  auto clientCtx = std::make_shared<folly::SSLContext>();
+  auto serverCtx = std::make_shared<folly::SSLContext>();
+  getctx(clientCtx, serverCtx);
+
+  WriteCallbackBase writeCallback;
+  ReadCallback readCallback(&writeCallback);
+  HandshakeCallback handshakeCallback(&readCallback);
+  SSLServerAcceptCallback acceptCallback(&handshakeCallback);
+  TestSSLServer server(&acceptCallback);
+
+  EventBase evb;
+  std::shared_ptr<AsyncSSLSocket> socket =
+      AsyncSSLSocket::newSocket(clientCtx, &evb, true);
+  socket->connect(nullptr, server.getAddress(), 0);
+
+  evb.loop();
+
+  EXPECT_EQ(AsyncSSLSocket::STATE_UNENCRYPTED, socket->getSSLState());
+  socket->sslConn(nullptr);
+  evb.loop();
+  EXPECT_EQ(AsyncSSLSocket::STATE_ESTABLISHED, socket->getSSLState());
+
+  // write()
+  std::array<uint8_t, 128> buf;
+  memset(buf.data(), 'a', buf.size());
+  socket->write(nullptr, buf.data(), buf.size());
+
+  socket->close();
+}
+
 TEST(AsyncSSLSocketTest, ConnResetErrorString) {
   // Start listening on a local port
   WriteCallbackBase writeCallback;
@@ -1648,9 +1701,13 @@ TEST(AsyncSSLSocketTest, ConnEOFErrorString) {
   socket->close();
 
   handshakeCallback.waitForHandshake();
+#if FOLLY_OPENSSL_IS_110
+  EXPECT_NE(
+      handshakeCallback.errorString_.find("Network error"), std::string::npos);
+#else
   EXPECT_NE(
       handshakeCallback.errorString_.find("Connection EOF"), std::string::npos);
-  EXPECT_NE(handshakeCallback.errorString_.find("EOF"), std::string::npos);
+#endif
 }
 
 TEST(AsyncSSLSocketTest, ConnOpenSSLErrorString) {
@@ -1676,6 +1733,9 @@ TEST(AsyncSSLSocketTest, ConnOpenSSLErrorString) {
   EXPECT_NE(
       handshakeCallback.errorString_.find("ENCRYPTED_LENGTH_TOO_LONG"),
       std::string::npos);
+#elif FOLLY_OPENSSL_IS_110
+  EXPECT_NE(handshakeCallback.errorString_.find("packet length too long"),
+            std::string::npos);
 #else
   EXPECT_NE(handshakeCallback.errorString_.find("unknown protocol"),
             std::string::npos);
@@ -1780,11 +1840,11 @@ TEST(AsyncSSLSocketTest, ConnectWriteReadCloseTFOWithTFOServerDisabled) {
 
 class ConnCallback : public AsyncSocket::ConnectCallback {
  public:
-  virtual void connectSuccess() noexcept override {
+  void connectSuccess() noexcept override {
     state = State::SUCCESS;
   }
 
-  virtual void connectErr(const AsyncSocketException& ex) noexcept override {
+  void connectErr(const AsyncSocketException& ex) noexcept override {
     state = State::ERROR;
     error = ex.what();
   }
