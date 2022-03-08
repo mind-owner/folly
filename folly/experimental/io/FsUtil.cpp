@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,6 +17,10 @@
 #include <folly/experimental/io/FsUtil.h>
 
 #include <folly/Exception.h>
+
+#ifdef __APPLE__
+#include <mach-o/dyld.h> // @manual
+#endif
 
 namespace bsys = ::boost::system;
 
@@ -40,7 +44,7 @@ bool skipPrefix(const path& pth, const path& prefix, path::const_iterator& it) {
   }
   return true;
 }
-}  // namespace
+} // namespace
 
 bool starts_with(const path& pth, const path& prefix) {
   path::const_iterator it;
@@ -52,7 +56,8 @@ path remove_prefix(const path& pth, const path& prefix) {
   if (!skipPrefix(pth, prefix, it)) {
     throw filesystem_error(
         "Path does not start with prefix",
-        pth, prefix,
+        pth,
+        prefix,
         bsys::errc::make_error_code(bsys::errc::invalid_argument));
   }
 
@@ -69,8 +74,17 @@ path canonical_parent(const path& pth, const path& base) {
 }
 
 path executable_path() {
+#ifdef __APPLE__
+  uint32_t size = 0;
+  _NSGetExecutablePath(nullptr, &size);
+  std::string buf(size - 1, '\0');
+  auto data = const_cast<char*>(&*buf.data());
+  _NSGetExecutablePath(data, &size);
+  return path(std::move(buf));
+#else
   return read_symlink("/proc/self/exe");
+#endif
 }
 
-}  // namespace fs
-}  // namespace folly
+} // namespace fs
+} // namespace folly

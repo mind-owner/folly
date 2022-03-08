@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,10 +23,18 @@ namespace folly {
 
 EventBaseThread::EventBaseThread() : EventBaseThread(true) {}
 
-EventBaseThread::EventBaseThread(bool autostart, EventBaseManager* ebm)
-    : ebm_(ebm) {
+EventBaseThread::EventBaseThread(
+    bool autostart, EventBaseManager* ebm, folly::StringPiece threadName)
+    : EventBaseThread(autostart, EventBase::Options(), ebm, threadName) {}
+
+EventBaseThread::EventBaseThread(
+    bool autostart,
+    EventBase::Options eventBaseOptions,
+    EventBaseManager* ebm,
+    folly::StringPiece threadName)
+    : ebm_(ebm), ebOpts_(std::move(eventBaseOptions)) {
   if (autostart) {
-    start();
+    start(threadName);
   }
 }
 
@@ -47,14 +55,14 @@ bool EventBaseThread::running() const {
   return !!th_;
 }
 
-void EventBaseThread::start() {
+void EventBaseThread::start(folly::StringPiece threadName) {
   if (th_) {
     return;
   }
-  th_ = std::make_unique<ScopedEventBaseThread>(ebm_);
+  th_ = std::make_unique<ScopedEventBaseThread>(ebOpts_, ebm_, threadName);
 }
 
 void EventBaseThread::stop() {
   th_ = nullptr;
 }
-}
+} // namespace folly

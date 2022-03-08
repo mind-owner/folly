@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,8 +20,8 @@
 #include <iterator>
 #include <type_traits>
 
-#include <folly/Malloc.h>
 #include <folly/io/IOBuf.h>
+#include <folly/memory/Malloc.h>
 
 namespace folly {
 
@@ -38,6 +38,7 @@ namespace folly {
 template <class T>
 class TypedIOBuf {
   static_assert(std::is_standard_layout<T>::value, "must be standard layout");
+
  public:
   typedef T value_type;
   typedef value_type& reference;
@@ -46,74 +47,32 @@ class TypedIOBuf {
   typedef value_type* iterator;
   typedef const value_type* const_iterator;
 
-  explicit TypedIOBuf(IOBuf* buf) : buf_(buf) { }
+  explicit TypedIOBuf(IOBuf* buf) : buf_(buf) {}
 
-  IOBuf* ioBuf() {
-    return buf_;
-  }
-  const IOBuf* ioBuf() const {
-    return buf_;
-  }
+  IOBuf* ioBuf() { return buf_; }
+  const IOBuf* ioBuf() const { return buf_; }
 
-  bool empty() const {
-    return buf_->empty();
-  }
-  const T* data() const {
-    return cast(buf_->data());
-  }
-  T* writableData() {
-    return cast(buf_->writableData());
-  }
-  const T* tail() const {
-    return cast(buf_->tail());
-  }
-  T* writableTail() {
-    return cast(buf_->writableTail());
-  }
-  uint32_t length() const {
-    return sdiv(buf_->length());
-  }
+  bool empty() const { return buf_->empty(); }
+  const T* data() const { return cast(buf_->data()); }
+  T* writableData() { return cast(buf_->writableData()); }
+  const T* tail() const { return cast(buf_->tail()); }
+  T* writableTail() { return cast(buf_->writableTail()); }
+  uint32_t length() const { return sdiv(buf_->length()); }
   uint32_t size() const { return length(); }
 
-  uint32_t headroom() const {
-    return sdiv(buf_->headroom());
-  }
-  uint32_t tailroom() const {
-    return sdiv(buf_->tailroom());
-  }
-  const T* buffer() const {
-    return cast(buf_->buffer());
-  }
-  T* writableBuffer() {
-    return cast(buf_->writableBuffer());
-  }
-  const T* bufferEnd() const {
-    return cast(buf_->bufferEnd());
-  }
-  uint32_t capacity() const {
-    return sdiv(buf_->capacity());
-  }
-  void advance(uint32_t n) {
-    buf_->advance(smul(n));
-  }
-  void retreat(uint32_t n) {
-    buf_->retreat(smul(n));
-  }
-  void prepend(uint32_t n) {
-    buf_->prepend(smul(n));
-  }
-  void append(uint32_t n) {
-    buf_->append(smul(n));
-  }
-  void trimStart(uint32_t n) {
-    buf_->trimStart(smul(n));
-  }
-  void trimEnd(uint32_t n) {
-    buf_->trimEnd(smul(n));
-  }
-  void clear() {
-    buf_->clear();
-  }
+  uint32_t headroom() const { return sdiv(buf_->headroom()); }
+  uint32_t tailroom() const { return sdiv(buf_->tailroom()); }
+  const T* buffer() const { return cast(buf_->buffer()); }
+  T* writableBuffer() { return cast(buf_->writableBuffer()); }
+  const T* bufferEnd() const { return cast(buf_->bufferEnd()); }
+  uint32_t capacity() const { return sdiv(buf_->capacity()); }
+  void advance(uint32_t n) { buf_->advance(smul(n)); }
+  void retreat(uint32_t n) { buf_->retreat(smul(n)); }
+  void prepend(uint32_t n) { buf_->prepend(smul(n)); }
+  void append(uint32_t n) { buf_->append(smul(n)); }
+  void trimStart(uint32_t n) { buf_->trimStart(smul(n)); }
+  void trimEnd(uint32_t n) { buf_->trimEnd(smul(n)); }
+  void clear() { buf_->clear(); }
   void reserve(uint32_t minHeadroom, uint32_t minTailroom) {
     buf_->reserve(smul(minHeadroom), smul(minTailroom));
   }
@@ -160,9 +119,7 @@ class TypedIOBuf {
   /**
    * Append one element.
    */
-  void push(const T& data) {
-    push(&data, &data + 1);
-  }
+  void push(const T& data) { push(&data, &data + 1); }
   void push_back(const T& data) { push(data); }
 
   /**
@@ -192,16 +149,12 @@ class TypedIOBuf {
   TypedIOBuf& operator=(const TypedIOBuf&) = delete;
 
   // cast to T*
-  static T* cast(uint8_t* p) {
-    return reinterpret_cast<T*>(p);
-  }
+  static T* cast(uint8_t* p) { return reinterpret_cast<T*>(p); }
   static const T* cast(const uint8_t* p) {
     return reinterpret_cast<const T*>(p);
   }
   // divide by size
-  static uint32_t sdiv(uint32_t n) {
-    return n / sizeof(T);
-  }
+  static uint32_t sdiv(uint32_t n) { return n / sizeof(T); }
   // multiply by size
   static uint32_t smul(uint32_t n) {
     // In debug mode, check for overflow

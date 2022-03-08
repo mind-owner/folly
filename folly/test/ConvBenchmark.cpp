@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,15 +16,16 @@
 
 #include <folly/Conv.h>
 
+#include <array>
+#include <limits>
+#include <stdexcept>
+
 #include <boost/lexical_cast.hpp>
 
 #include <folly/Benchmark.h>
 #include <folly/CppAttributes.h>
-#include <folly/Foreach.h>
-
-#include <array>
-#include <limits>
-#include <stdexcept>
+#include <folly/container/Foreach.h>
+#include <folly/lang/ToAscii.h>
 
 using namespace std;
 using namespace folly;
@@ -244,8 +245,8 @@ __int128 int128Neg[] = {
 };
 
 #endif
-}
-}
+} // namespace conv_bench_detail
+} // namespace folly
 
 using namespace folly::conv_bench_detail;
 
@@ -255,7 +256,7 @@ template <typename T>
 void checkArrayIndex(const T& array, size_t index) {
   DCHECK_LT(index, sizeof(array) / sizeof(array[0]));
 }
-}
+} // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 // Benchmarks for ASCII to int conversion
@@ -263,7 +264,6 @@ void checkArrayIndex(const T& array, size_t index) {
 // @author: Rajat Goel (rajat)
 
 static int64_t handwrittenAtoi(const char* start, const char* end) {
-
   bool positive = true;
   int64_t retVal = 0;
 
@@ -305,14 +305,14 @@ static StringPiece pc1 = "1234567890123456789";
 
 void handwrittenAtoiMeasure(unsigned int n, unsigned int digits) {
   auto p = pc1.subpiece(pc1.size() - digits, digits);
-  FOR_EACH_RANGE(i, 0, n) {
+  FOR_EACH_RANGE (i, 0, n) {
     doNotOptimizeAway(handwrittenAtoi(p.begin(), p.end()));
   }
 }
 
 void follyAtoiMeasure(unsigned int n, unsigned int digits) {
   auto p = pc1.subpiece(pc1.size() - digits, digits);
-  FOR_EACH_RANGE(i, 0, n) {
+  FOR_EACH_RANGE (i, 0, n) {
     doNotOptimizeAway(folly::to<int64_t>(p.begin(), p.end()));
   }
 }
@@ -320,13 +320,13 @@ void follyAtoiMeasure(unsigned int n, unsigned int digits) {
 void clibAtoiMeasure(unsigned int n, unsigned int digits) {
   auto p = pc1.subpiece(pc1.size() - digits, digits);
   assert(*p.end() == 0);
-  FOR_EACH_RANGE(i, 0, n) { doNotOptimizeAway(atoll(p.begin())); }
+  FOR_EACH_RANGE (i, 0, n) { doNotOptimizeAway(atoll(p.begin())); }
 }
 
 void lexicalCastMeasure(unsigned int n, unsigned int digits) {
   auto p = pc1.subpiece(pc1.size() - digits, digits);
   assert(*p.end() == 0);
-  FOR_EACH_RANGE(i, 0, n) {
+  FOR_EACH_RANGE (i, 0, n) {
     doNotOptimizeAway(boost::lexical_cast<uint64_t>(p.begin()));
   }
 }
@@ -346,7 +346,7 @@ unsigned u64ToAsciiTable(uint64_t value, char* dst) {
       "80818283848586878889"
       "90919293949596979899";
 
-  uint32_t const length = digits10(value);
+  uint32_t const length = to_ascii_size_decimal(value);
   uint32_t next = length - 1;
   while (value >= 100) {
     auto const i = (value % 100) * 2;
@@ -369,7 +369,7 @@ unsigned u64ToAsciiTable(uint64_t value, char* dst) {
 void u64ToAsciiTableBM(unsigned int n, size_t index) {
   checkArrayIndex(uint64Num, index);
   char buf[20];
-  FOR_EACH_RANGE(i, 0, n) {
+  FOR_EACH_RANGE (i, 0, n) {
     doNotOptimizeAway(u64ToAsciiTable(uint64Num[index] + (i % 8), buf));
   }
 }
@@ -399,7 +399,7 @@ unsigned u64ToAsciiClassic(uint64_t value, char* dst) {
 void u64ToAsciiClassicBM(unsigned int n, size_t index) {
   checkArrayIndex(uint64Num, index);
   char buf[20];
-  FOR_EACH_RANGE(i, 0, n) {
+  FOR_EACH_RANGE (i, 0, n) {
     doNotOptimizeAway(u64ToAsciiClassic(uint64Num[index] + (i % 8), buf));
   }
 }
@@ -407,8 +407,8 @@ void u64ToAsciiClassicBM(unsigned int n, size_t index) {
 void u64ToAsciiFollyBM(unsigned int n, size_t index) {
   checkArrayIndex(uint64Num, index);
   char buf[20];
-  FOR_EACH_RANGE(i, 0, n) {
-    doNotOptimizeAway(uint64ToBufferUnsafe(uint64Num[index] + (i % 8), buf));
+  FOR_EACH_RANGE (i, 0, n) {
+    doNotOptimizeAway(to_ascii_decimal(buf, uint64Num[index] + (i % 8)));
   }
 }
 
@@ -452,7 +452,7 @@ void i64ToStringFollyMeasureNeg(unsigned int n, size_t index) {
 void u2aAppendClassicBM(unsigned int n, size_t index) {
   checkArrayIndex(uint64Num, index);
   string s;
-  FOR_EACH_RANGE(i, 0, n) {
+  FOR_EACH_RANGE (i, 0, n) {
     // auto buf = &s.back() + 1;
     char buffer[20];
     s.append(buffer, u64ToAsciiClassic(uint64Num[index] + (i % 8), buffer));
@@ -463,10 +463,10 @@ void u2aAppendClassicBM(unsigned int n, size_t index) {
 void u2aAppendFollyBM(unsigned int n, size_t index) {
   checkArrayIndex(uint64Num, index);
   string s;
-  FOR_EACH_RANGE(i, 0, n) {
+  FOR_EACH_RANGE (i, 0, n) {
     // auto buf = &s.back() + 1;
     char buffer[20];
-    s.append(buffer, uint64ToBufferUnsafe(uint64Num[index] + (i % 8), buffer));
+    s.append(buffer, to_ascii_decimal(buffer, uint64Num[index] + (i % 8)));
     doNotOptimizeAway(s.size());
   }
 }
@@ -477,7 +477,7 @@ struct StringIdenticalToBM {
   void operator()(unsigned int n, size_t len) const {
     String s;
     BENCHMARK_SUSPEND { s.append(len, '0'); }
-    FOR_EACH_RANGE(i, 0, n) {
+    FOR_EACH_RANGE (i, 0, n) {
       String result = to<String>(s);
       doNotOptimizeAway(result.size());
     }
@@ -490,7 +490,7 @@ struct StringVariadicToBM {
   void operator()(unsigned int n, size_t len) const {
     String s;
     BENCHMARK_SUSPEND { s.append(len, '0'); }
-    FOR_EACH_RANGE(i, 0, n) {
+    FOR_EACH_RANGE (i, 0, n) {
       String result = to<String>(s, nullptr);
       doNotOptimizeAway(result.size());
     }
@@ -511,8 +511,8 @@ char reallyShort[] = "meh";
 std::string stdString = "std::strings are very nice";
 float fValue = 1.2355f;
 double dValue = 345345345.435;
-}
-}
+} // namespace conv_bench_detail
+} // namespace folly
 
 BENCHMARK(preallocateTestNoFloat, n) {
   for (size_t i = 0; i < n; ++i) {
@@ -586,8 +586,8 @@ uint64_t u64s[] = {
     static_cast<uint64_t>(1) << 50,
     static_cast<uint64_t>(1) << 63,
 };
-}
-}
+} // namespace conv_bench_detail
+} // namespace folly
 
 BENCHMARK(preallocateTestInt8, n) {
   for (size_t i = 0; i < n; ++i) {
@@ -675,7 +675,7 @@ unsigned __int128 u128s[] = {
     static_cast<unsigned __int128>(1) << 100,
     static_cast<unsigned __int128>(1) << 127,
 };
-}
+} // namespace
 
 BENCHMARK(preallocateTestInt128, n) {
   for (size_t i = 0; i < n; ++i) {
@@ -718,11 +718,11 @@ static const StringVariadicToBM<std::string> stringVariadicToBM;
 static const StringIdenticalToBM<fbstring> fbstringIdenticalToBM;
 static const StringVariadicToBM<fbstring> fbstringVariadicToBM;
 
-#define DEFINE_BENCHMARK_GROUP(n)                 \
-  BENCHMARK_PARAM(u64ToAsciiClassicBM, n);        \
-  BENCHMARK_RELATIVE_PARAM(u64ToAsciiTableBM, n); \
-  BENCHMARK_RELATIVE_PARAM(u64ToAsciiFollyBM, n); \
-  BENCHMARK_DRAW_LINE();
+#define DEFINE_BENCHMARK_GROUP(n)                \
+  BENCHMARK_PARAM(u64ToAsciiClassicBM, n)        \
+  BENCHMARK_RELATIVE_PARAM(u64ToAsciiTableBM, n) \
+  BENCHMARK_RELATIVE_PARAM(u64ToAsciiFollyBM, n) \
+  BENCHMARK_DRAW_LINE()
 
 DEFINE_BENCHMARK_GROUP(1);
 DEFINE_BENCHMARK_GROUP(2);
@@ -747,12 +747,12 @@ DEFINE_BENCHMARK_GROUP(20);
 
 #undef DEFINE_BENCHMARK_GROUP
 
-#define DEFINE_BENCHMARK_GROUP(n)                          \
-  BENCHMARK_PARAM(u64ToStringClibMeasure, n);              \
-  BENCHMARK_RELATIVE_PARAM(u64ToStringFollyMeasure, n);    \
-  BENCHMARK_RELATIVE_PARAM(i64ToStringFollyMeasurePos, n); \
-  BENCHMARK_RELATIVE_PARAM(i64ToStringFollyMeasureNeg, n); \
-  BENCHMARK_DRAW_LINE();
+#define DEFINE_BENCHMARK_GROUP(n)                         \
+  BENCHMARK_PARAM(u64ToStringClibMeasure, n)              \
+  BENCHMARK_RELATIVE_PARAM(u64ToStringFollyMeasure, n)    \
+  BENCHMARK_RELATIVE_PARAM(i64ToStringFollyMeasurePos, n) \
+  BENCHMARK_RELATIVE_PARAM(i64ToStringFollyMeasureNeg, n) \
+  BENCHMARK_DRAW_LINE()
 
 DEFINE_BENCHMARK_GROUP(1);
 DEFINE_BENCHMARK_GROUP(2);
@@ -775,8 +775,8 @@ DEFINE_BENCHMARK_GROUP(18);
 DEFINE_BENCHMARK_GROUP(19);
 
 // Only for u64
-BENCHMARK_PARAM(u64ToStringClibMeasure, 20);
-BENCHMARK_RELATIVE_PARAM(u64ToStringFollyMeasure, 20);
+BENCHMARK_PARAM(u64ToStringClibMeasure, 20)
+BENCHMARK_RELATIVE_PARAM(u64ToStringFollyMeasure, 20)
 BENCHMARK_DRAW_LINE();
 
 #undef DEFINE_BENCHMARK_GROUP
@@ -804,11 +804,11 @@ void i128ToStringFollyMeasureNeg(unsigned int n, size_t index) {
   }
 }
 
-#define DEFINE_BENCHMARK_GROUP(n)                           \
-  BENCHMARK_PARAM(u128ToStringFollyMeasure, n);             \
-  BENCHMARK_RELATIVE_PARAM(i128ToStringFollyMeasurePos, n); \
-  BENCHMARK_RELATIVE_PARAM(i128ToStringFollyMeasureNeg, n); \
-  BENCHMARK_DRAW_LINE();
+#define DEFINE_BENCHMARK_GROUP(n)                          \
+  BENCHMARK_PARAM(u128ToStringFollyMeasure, n)             \
+  BENCHMARK_RELATIVE_PARAM(i128ToStringFollyMeasurePos, n) \
+  BENCHMARK_RELATIVE_PARAM(i128ToStringFollyMeasureNeg, n) \
+  BENCHMARK_DRAW_LINE()
 
 DEFINE_BENCHMARK_GROUP(1);
 DEFINE_BENCHMARK_GROUP(2);
@@ -856,12 +856,12 @@ BENCHMARK_DRAW_LINE();
 
 #endif
 
-#define DEFINE_BENCHMARK_GROUP(n)                      \
-  BENCHMARK_PARAM(clibAtoiMeasure, n);                 \
-  BENCHMARK_RELATIVE_PARAM(lexicalCastMeasure, n);     \
-  BENCHMARK_RELATIVE_PARAM(handwrittenAtoiMeasure, n); \
-  BENCHMARK_RELATIVE_PARAM(follyAtoiMeasure, n);       \
-  BENCHMARK_DRAW_LINE();
+#define DEFINE_BENCHMARK_GROUP(n)                     \
+  BENCHMARK_PARAM(clibAtoiMeasure, n)                 \
+  BENCHMARK_RELATIVE_PARAM(lexicalCastMeasure, n)     \
+  BENCHMARK_RELATIVE_PARAM(handwrittenAtoiMeasure, n) \
+  BENCHMARK_RELATIVE_PARAM(follyAtoiMeasure, n)       \
+  BENCHMARK_DRAW_LINE()
 
 DEFINE_BENCHMARK_GROUP(1);
 DEFINE_BENCHMARK_GROUP(2);
@@ -885,10 +885,10 @@ DEFINE_BENCHMARK_GROUP(19);
 
 #undef DEFINE_BENCHMARK_GROUP
 
-#define DEFINE_BENCHMARK_GROUP(T, n)             \
-  BENCHMARK_PARAM(T##VariadicToBM, n);           \
-  BENCHMARK_RELATIVE_PARAM(T##IdenticalToBM, n); \
-  BENCHMARK_DRAW_LINE();
+#define DEFINE_BENCHMARK_GROUP(T, n)            \
+  BENCHMARK_PARAM(T##VariadicToBM, n)           \
+  BENCHMARK_RELATIVE_PARAM(T##IdenticalToBM, n) \
+  BENCHMARK_DRAW_LINE()
 
 DEFINE_BENCHMARK_GROUP(string, 32);
 DEFINE_BENCHMARK_GROUP(string, 1024);
@@ -1012,8 +1012,8 @@ std::array<double, 4> double2FloatGood{{1.0, 1.25, 2.5, 1000.0}};
 std::array<double, 4> double2FloatBad{{1e100, 1e101, 1e102, 1e103}};
 std::array<double, 4> double2IntGood{{1.0, 10.0, 100.0, 1000.0}};
 std::array<double, 4> double2IntBad{{1e100, 1.25, 2.5, 100.00001}};
-}
-}
+} // namespace conv_bench_detail
+} // namespace folly
 
 #define STRING_TO_TYPE_BENCHMARK(type, name, pass, fail) \
   BENCHMARK(stringTo##name##Classic, n) {                \
@@ -1081,20 +1081,14 @@ STRING_TO_TYPE_BENCHMARK(
     " -8123456789123456789 ",
     "-10000000000000000000000")
 STRING_TO_TYPE_BENCHMARK(
-    unsigned long long,
-    LongLongUnsigned,
-    " 18123456789123456789 ",
-    "-4711")
+    unsigned long long, LongLongUnsigned, " 18123456789123456789 ", "-4711")
 BENCHMARK_DRAW_LINE();
 
 PTR_PAIR_TO_INT_BENCHMARK(signed char, CharSigned, "-47", "1000")
 PTR_PAIR_TO_INT_BENCHMARK(unsigned char, CharUnsigned, "47", "1000")
 PTR_PAIR_TO_INT_BENCHMARK(int, IntSigned, "-4711", "-10000000000000000000000")
 PTR_PAIR_TO_INT_BENCHMARK(
-    unsigned int,
-    IntUnsigned,
-    "4711",
-    "10000000000000000000000")
+    unsigned int, IntUnsigned, "4711", "10000000000000000000000")
 PTR_PAIR_TO_INT_BENCHMARK(
     long long,
     LongLongSigned,

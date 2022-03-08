@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,15 +21,13 @@
 #include <vector>
 
 #include <folly/Benchmark.h>
+#include <folly/Random.h>
 #include <folly/experimental/EliasFanoCoding.h>
 #include <folly/experimental/Select64.h>
 #include <folly/experimental/test/CodingTestUtils.h>
+#include <folly/init/Init.h>
 
 using namespace folly::compression;
-
-#ifndef EF_TEST_ARCH
-#define EF_TEST_ARCH Default
-#endif  // EF_TEST_ARCH
 
 namespace {
 
@@ -41,29 +39,28 @@ uint8_t slowDefaultNumLowerBits(size_t upperBound, size_t size) {
   return uint8_t(folly::findLastSet(upperBound / size) - 1);
 }
 
-}  // namespace
+} // namespace
 
 TEST(EliasFanoCoding, defaultNumLowerBits) {
   // Verify that slowDefaultNumLowerBits and optimized
   // Encoder::defaultNumLowerBits agree.
-  static constexpr size_t kNumIterations = 2500;
+  static constexpr size_t kNumIterations = 750;
   auto compare = [](size_t upperBound, size_t size) {
-    using Encoder = EliasFanoEncoderV2<size_t>;
-    EXPECT_EQ(int(slowDefaultNumLowerBits(upperBound, size)),
-              int(Encoder::defaultNumLowerBits(upperBound, size)))
+    using Encoder = EliasFanoEncoder<size_t>;
+    EXPECT_EQ(
+        int(slowDefaultNumLowerBits(upperBound, size)),
+        int(Encoder::defaultNumLowerBits(upperBound, size)))
         << upperBound << " " << size;
   };
   auto batch = [&compare](size_t initialUpperBound) {
-    for (size_t upperBound = initialUpperBound, i = 0;
-         i < kNumIterations;
+    for (size_t upperBound = initialUpperBound, i = 0; i < kNumIterations;
          ++i, --upperBound) {
       // Test "size" values close to "upperBound".
       for (size_t size = upperBound, j = 0; j < kNumIterations; ++j, --size) {
         compare(upperBound, size);
       }
       // Sample "size" values between [0, upperBound].
-      for (size_t size = upperBound;
-           size > 1 + upperBound / kNumIterations;
+      for (size_t size = upperBound; size > 1 + upperBound / kNumIterations;
            size -= 1 + upperBound / kNumIterations) {
         compare(upperBound, size);
       }
@@ -89,20 +86,80 @@ TEST(EliasFanoCoding, defaultNumLowerBits) {
 class EliasFanoCodingTest : public ::testing::Test {
  public:
   void doTestEmpty() {
-    typedef EliasFanoEncoderV2<uint32_t, size_t> Encoder;
-    typedef EliasFanoReader<Encoder> Reader;
+    using Encoder = EliasFanoEncoder<uint32_t, size_t>;
+    using Reader = EliasFanoReader<Encoder>;
     testEmpty<Reader, Encoder>();
   }
 
-  template <size_t kSkipQuantum, size_t kForwardQuantum, class SizeType>
-  void doTestAll() {
-    typedef EliasFanoEncoderV2<
-      uint32_t, uint32_t, kSkipQuantum, kForwardQuantum> Encoder;
-    using Reader =
-        EliasFanoReader<Encoder, instructions::EF_TEST_ARCH, false, SizeType>;
+  template <
+      size_t kSkipQuantum,
+      size_t kForwardQuantum,
+      typename ValueType,
+      typename SkipValueType,
+      bool kUpperFirst>
+  void doTest() {
+    using Encoder = EliasFanoEncoder<
+        ValueType,
+        SkipValueType,
+        kSkipQuantum,
+        kForwardQuantum,
+        kUpperFirst>;
+    using Reader = EliasFanoReader<Encoder, instructions::Default, false>;
     testAll<Reader, Encoder>({0});
     testAll<Reader, Encoder>(generateRandomList(100 * 1000, 10 * 1000 * 1000));
+    // Test a list with size multiple of kForwardQuantum and universe multiple
+    // of kSkipQuantum, to exercise corner cases in the construction of forward
+    // and skip lists.
+    testAll<Reader, Encoder>(generateRandomList(
+        std::max<size_t>(8 * kForwardQuantum, 1024),
+        std::max<size_t>(16 * kSkipQuantum, 2048)));
+    testAll<Reader, Encoder>(generateRandomList(
+        100 * 1000, 10 * 1000 * 1000, /* withDuplicates */ true));
     testAll<Reader, Encoder>(generateSeqList(1, 100000, 100));
+    testAll<Reader, Encoder>({0, 1, std::numeric_limits<uint32_t>::max()});
+    // Test data with additional trailing 0s in the upperBits by extending
+    // the upper bound.
+    constexpr uint64_t minUpperBoundExtension = 2;
+    constexpr uint64_t maxUpperBoundExtension = 1024;
+    testAll<Reader, Encoder>(
+        generateRandomList(100 * 1000, 10 * 1000 * 1000),
+        folly::Random::rand32(minUpperBoundExtension, maxUpperBoundExtension));
+  }
+
+  template <size_t kSkipQuantum, size_t kForwardQuantum, typename ValueType>
+  void doTestAll() {
+    doTest<kSkipQuantum, kForwardQuantum, ValueType, uint32_t, true>();
+    doTest<kSkipQuantum, kForwardQuantum, ValueType, uint32_t, false>();
+    doTest<kSkipQuantum, kForwardQuantum, ValueType, uint64_t, true>();
+    doTest<kSkipQuantum, kForwardQuantum, ValueType, uint64_t, false>();
+  }
+
+  // Test lists where values and sizes are close to the numeric limits of the
+  // corresponding types, by using 16-bit types for everything.
+  template <size_t kSkipQuantum, size_t kForwardQuantum, bool kUpperFirst>
+  void doTestDense() {
+    using Encoder = EliasFanoEncoder<
+        uint16_t,
+        uint16_t,
+        kSkipQuantum,
+        kForwardQuantum,
+        kUpperFirst>;
+    using Reader = EliasFanoReader<Encoder, instructions::Default, false>;
+    constexpr size_t kMaxU16 = std::numeric_limits<uint16_t>::max();
+
+    // Max SizeType value is reserved.
+    testAll<Reader, Encoder>(generateSeqList(1, kMaxU16 - 1));
+    // Test various sizes close to the limit.
+    for (size_t i = 1; i <= 16; ++i) {
+      testAll<Reader, Encoder>(
+          generateRandomList(kMaxU16 - i, kMaxU16, /* withDuplicates */ true));
+    }
+  }
+
+  template <size_t kSkipQuantum, size_t kForwardQuantum>
+  void doTestDenseAll() {
+    doTestDense<kSkipQuantum, kForwardQuantum, true>();
+    doTestDense<kSkipQuantum, kForwardQuantum, false>();
   }
 };
 
@@ -110,42 +167,49 @@ TEST_F(EliasFanoCodingTest, Empty) {
   doTestEmpty();
 }
 
-TEST_F(EliasFanoCodingTest, Simple) {
+TEST_F(EliasFanoCodingTest, Simple32Bit) {
   doTestAll<0, 0, uint32_t>();
-  doTestAll<0, 0, size_t>();
+}
+TEST_F(EliasFanoCodingTest, Simple64Bit) {
+  doTestAll<0, 0, uint64_t>();
+}
+TEST_F(EliasFanoCodingTest, SimpleDense) {
+  doTestDenseAll<0, 0>();
 }
 
-TEST_F(EliasFanoCodingTest, SkipPointers) {
+TEST_F(EliasFanoCodingTest, SkipPointers32Bit) {
   doTestAll<128, 0, uint32_t>();
-  doTestAll<128, 0, size_t>();
+}
+TEST_F(EliasFanoCodingTest, SkipPointers64Bit) {
+  doTestAll<128, 0, uint64_t>();
+}
+TEST_F(EliasFanoCodingTest, SkipPointersDense) {
+  doTestDenseAll<128, 0>();
 }
 
-TEST_F(EliasFanoCodingTest, ForwardPointers) {
+TEST_F(EliasFanoCodingTest, ForwardPointers32Bit) {
   doTestAll<0, 128, uint32_t>();
-  doTestAll<0, 128, size_t>();
+}
+TEST_F(EliasFanoCodingTest, ForwardPointers64Bit) {
+  doTestAll<0, 128, uint64_t>();
+}
+TEST_F(EliasFanoCodingTest, ForwardPointersDense) {
+  doTestDenseAll<0, 128>();
 }
 
-TEST_F(EliasFanoCodingTest, SkipForwardPointers) {
+TEST_F(EliasFanoCodingTest, SkipForwardPointers32Bit) {
   doTestAll<128, 128, uint32_t>();
-  doTestAll<128, 128, size_t>();
 }
-
-TEST_F(EliasFanoCodingTest, Select64) {
-  typedef instructions::EF_TEST_ARCH instr;
-  constexpr uint64_t kPrime = uint64_t(-59);
-  for (uint64_t x = kPrime, i = 0; i < (1 << 20); x *= kPrime, i += 1) {
-    size_t w = instr::popcount(x);
-    for (size_t k = 0; k < w; ++k) {
-      auto pos = folly::select64<instr>(x, k);
-      CHECK_EQ((x >> pos) & 1, 1);
-      CHECK_EQ(instr::popcount(x & ((uint64_t(1) << pos) - 1)), k);
-    }
-  }
+TEST_F(EliasFanoCodingTest, SkipForwardPointers64Bit) {
+  doTestAll<128, 128, uint64_t>();
+}
+TEST_F(EliasFanoCodingTest, SkipForwardPointersDense) {
+  doTestDenseAll<128, 128>();
 }
 
 TEST_F(EliasFanoCodingTest, BugLargeGapInUpperBits) { // t16274876
-  typedef EliasFanoEncoderV2<uint32_t, uint32_t, 2, 2> Encoder;
-  typedef EliasFanoReader<Encoder, instructions::EF_TEST_ARCH> Reader;
+  typedef EliasFanoEncoder<uint32_t, uint32_t, 2, 2> Encoder;
+  typedef EliasFanoReader<Encoder, instructions::Default> Reader;
   constexpr uint32_t kLargeValue = 127;
 
   // Build a list where the upper bits have a large gap after the
@@ -169,14 +233,13 @@ TEST_F(EliasFanoCodingTest, BugLargeGapInUpperBits) { // t16274876
 
 namespace bm {
 
-typedef EliasFanoEncoderV2<uint32_t, uint32_t, 128, 128> Encoder;
-typedef EliasFanoReader<Encoder> Reader;
+typedef EliasFanoEncoder<uint32_t, uint32_t, 128, 128> Encoder;
 
-std::vector<uint32_t> data;
+std::vector<uint64_t> data;
 std::vector<size_t> order;
 
-std::vector<uint32_t> encodeSmallData;
-std::vector<uint32_t> encodeLargeData;
+std::vector<uint64_t> encodeSmallData;
+std::vector<uint64_t> encodeLargeData;
 
 std::vector<std::pair<size_t, size_t>> numLowerBitsInput;
 
@@ -207,14 +270,20 @@ void free() {
   list.free();
 }
 
-}  // namespace bm
+} // namespace bm
 
 BENCHMARK(Next, iters) {
-  bmNext<bm::Reader>(bm::list, bm::data, iters);
+  dispatchInstructions([&](auto instructions) {
+    bmNext<EliasFanoReader<bm::Encoder, decltype(instructions)>>(
+        bm::list, bm::data, iters);
+  });
 }
 
 size_t Skip_ForwardQ128(size_t iters, size_t logAvgSkip) {
-  bmSkip<bm::Reader>(bm::list, bm::data, logAvgSkip, iters);
+  dispatchInstructions([&](auto instructions) {
+    bmSkip<EliasFanoReader<bm::Encoder, decltype(instructions)>>(
+        bm::list, bm::data, logAvgSkip, iters);
+  });
   return iters;
 }
 
@@ -227,13 +296,19 @@ BENCHMARK_NAMED_PARAM_MULTI(Skip_ForwardQ128, 256_pm_64, 8)
 BENCHMARK_NAMED_PARAM_MULTI(Skip_ForwardQ128, 1024_pm_256, 10)
 
 BENCHMARK(Jump_ForwardQ128, iters) {
-  bmJump<bm::Reader>(bm::list, bm::data, bm::order, iters);
+  dispatchInstructions([&](auto instructions) {
+    bmJump<EliasFanoReader<bm::Encoder, decltype(instructions)>>(
+        bm::list, bm::data, bm::order, iters);
+  });
 }
 
 BENCHMARK_DRAW_LINE();
 
 size_t SkipTo_SkipQ128(size_t iters, size_t logAvgSkip) {
-  bmSkipTo<bm::Reader>(bm::list, bm::data, logAvgSkip, iters);
+  dispatchInstructions([&](auto instructions) {
+    bmSkipTo<EliasFanoReader<bm::Encoder, decltype(instructions)>>(
+        bm::list, bm::data, logAvgSkip, iters);
+  });
   return iters;
 }
 
@@ -246,27 +321,30 @@ BENCHMARK_NAMED_PARAM_MULTI(SkipTo_SkipQ128, 256_pm_64, 8)
 BENCHMARK_NAMED_PARAM_MULTI(SkipTo_SkipQ128, 1024_pm_256, 10)
 
 BENCHMARK(JumpTo_SkipQ128, iters) {
-  bmJumpTo<bm::Reader>(bm::list, bm::data, bm::order, iters);
+  dispatchInstructions([&](auto instructions) {
+    bmJumpTo<EliasFanoReader<bm::Encoder, decltype(instructions)>>(
+        bm::list, bm::data, bm::order, iters);
+  });
 }
 
 BENCHMARK_DRAW_LINE();
 
 BENCHMARK(Encode_10) {
-  auto list = bm::Encoder::encode(bm::encodeSmallData.begin(),
-                                  bm::encodeSmallData.end());
+  auto list = bm::Encoder::encode(
+      bm::encodeSmallData.begin(), bm::encodeSmallData.end());
   list.free();
 }
 
 BENCHMARK(Encode) {
-  auto list = bm::Encoder::encode(bm::encodeLargeData.begin(),
-                                  bm::encodeLargeData.end());
+  auto list = bm::Encoder::encode(
+      bm::encodeLargeData.begin(), bm::encodeLargeData.end());
   list.free();
 }
 
 BENCHMARK_DRAW_LINE();
 
 BENCHMARK(defaultNumLowerBits, iters) {
-  using Encoder = EliasFanoEncoderV2<size_t>;
+  using Encoder = EliasFanoEncoder<size_t>;
 
   size_t i = 0;
   while (iters--) {
@@ -290,40 +368,41 @@ BENCHMARK(slowDefaultNumLowerBits, iters) {
 }
 
 #if 0
-Intel(R) Xeon(R) CPU E5-2678 v3 @ 2.50GHz (turbo on),
-using -DEF_TEST_ARCH Haswell and GCC 4.9 with --bm_min_usec 100000.
+// Intel(R) Xeon(R) CPU E5-2678 v3 @ 2.50GHz, Clang 8.0.
+// $ eliasfano_test --benchmark --bm_min_usec 200000
 ============================================================================
 folly/experimental/test/EliasFanoCodingTest.cpp relative  time/iter  iters/s
 ============================================================================
-Next                                                         2.31ns  433.77M
-Skip_ForwardQ128(1)                                          3.73ns  267.93M
-Skip_ForwardQ128(2)                                          4.89ns  204.34M
-Skip_ForwardQ128(4_pm_1)                                     6.86ns  145.79M
-Skip_ForwardQ128(16_pm_4)                                   18.92ns   52.85M
-Skip_ForwardQ128(64_pm_16)                                  26.56ns   37.66M
-Skip_ForwardQ128(256_pm_64)                                 30.12ns   33.20M
-Skip_ForwardQ128(1024_pm_256)                               30.74ns   32.53M
-Jump_ForwardQ128                                            30.49ns   32.80M
+Next                                                         2.58ns  388.22M
+Skip_ForwardQ128(1)                                          4.81ns  207.72M
+Skip_ForwardQ128(2)                                          5.96ns  167.75M
+Skip_ForwardQ128(4_pm_1)                                     7.40ns  135.16M
+Skip_ForwardQ128(16_pm_4)                                    8.20ns  121.97M
+Skip_ForwardQ128(64_pm_16)                                  12.04ns   83.06M
+Skip_ForwardQ128(256_pm_64)                                 16.84ns   59.39M
+Skip_ForwardQ128(1024_pm_256)                               17.67ns   56.61M
+Jump_ForwardQ128                                            25.37ns   39.41M
 ----------------------------------------------------------------------------
-SkipTo_SkipQ128(1)                                           3.86ns  258.96M
-SkipTo_SkipQ128(2)                                           7.73ns  129.36M
-SkipTo_SkipQ128(4_pm_1)                                     10.29ns   97.18M
-SkipTo_SkipQ128(16_pm_4)                                    28.69ns   34.86M
-SkipTo_SkipQ128(64_pm_16)                                   39.73ns   25.17M
-SkipTo_SkipQ128(256_pm_64)                                  43.45ns   23.01M
-SkipTo_SkipQ128(1024_pm_256)                                44.66ns   22.39M
-JumpTo_SkipQ128                                             47.98ns   20.84M
+SkipTo_SkipQ128(1)                                           7.27ns  137.59M
+SkipTo_SkipQ128(2)                                          10.99ns   91.01M
+SkipTo_SkipQ128(4_pm_1)                                     13.53ns   73.93M
+SkipTo_SkipQ128(16_pm_4)                                    20.58ns   48.59M
+SkipTo_SkipQ128(64_pm_16)                                   32.08ns   31.18M
+SkipTo_SkipQ128(256_pm_64)                                  38.66ns   25.87M
+SkipTo_SkipQ128(1024_pm_256)                                42.32ns   23.63M
+JumpTo_SkipQ128                                             47.95ns   20.86M
 ----------------------------------------------------------------------------
-Encode_10                                                   77.92ns   12.83M
-Encode                                                       4.73ms   211.41
+Encode_10                                                  103.99ns    9.62M
+Encode                                                       7.60ms   131.53
 ----------------------------------------------------------------------------
-defaultNumLowerBits                                          2.20ns  455.01M
-slowDefaultNumLowerBits                                      7.90ns  126.59M
+defaultNumLowerBits                                          3.59ns  278.69M
+slowDefaultNumLowerBits                                     10.88ns   91.90M
 ============================================================================
 #endif
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
+  folly::init(&argc, &argv);
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   auto ret = RUN_ALL_TESTS();

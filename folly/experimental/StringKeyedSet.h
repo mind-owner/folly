@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// Copyright 2013-present Facebook. All Rights Reserved.
+
 // @author: Pavlo Kushnir (pavlo)
 
 #pragma once
@@ -21,6 +21,7 @@
 #include <initializer_list>
 #include <memory>
 #include <set>
+
 #include <folly/Range.h>
 #include <folly/experimental/StringKeyedCommon.h>
 
@@ -33,14 +34,14 @@ namespace folly {
  * It uses kind of hack: string pointed by StringPiece is copied when
  * StringPiece is inserted into set
  */
-template <class Compare = std::less<StringPiece>,
-          class Alloc = std::allocator<StringPiece>>
-class StringKeyedSetBase
-    : private std::set<StringPiece, Compare, Alloc> {
-private:
+template <
+    class Compare = std::less<StringPiece>,
+    class Alloc = std::allocator<StringPiece>>
+class StringKeyedSetBase : private std::set<StringPiece, Compare, Alloc> {
+ private:
   using Base = std::set<StringPiece, Compare, Alloc>;
 
-public:
+ public:
   typedef typename Base::key_type key_type;
   typedef typename Base::value_type value_type;
   typedef typename Base::key_compare key_compare;
@@ -57,20 +58,18 @@ public:
   typedef typename Base::difference_type difference_type;
 
   explicit StringKeyedSetBase(
-    const key_compare& comp = key_compare(),
-    const allocator_type& alloc = allocator_type())
-      : Base(comp, alloc) {
-  }
+      const key_compare& comp = key_compare(),
+      const allocator_type& alloc = allocator_type())
+      : Base(comp, alloc) {}
 
-  explicit StringKeyedSetBase(const allocator_type& alloc)
-      : Base(alloc) {
-  }
+  explicit StringKeyedSetBase(const allocator_type& alloc) : Base(alloc) {}
 
   template <class InputIterator>
   StringKeyedSetBase(
-    InputIterator b, InputIterator e,
-    const key_compare& comp = key_compare(),
-    const allocator_type& alloc = allocator_type())
+      InputIterator b,
+      InputIterator e,
+      const key_compare& comp = key_compare(),
+      const allocator_type& alloc = allocator_type())
       : Base(comp, alloc) {
     for (; b != e; ++b) {
       emplace(*b);
@@ -78,31 +77,27 @@ public:
   }
 
   StringKeyedSetBase(const StringKeyedSetBase& rhs)
-      : StringKeyedSetBase(rhs, rhs.get_allocator()) {
-  }
+      : StringKeyedSetBase(rhs, rhs.get_allocator()) {}
 
-  StringKeyedSetBase(const StringKeyedSetBase& rhs,
-                     const allocator_type& a)
-      : StringKeyedSetBase(rhs.begin(), rhs.end(), rhs.key_comp(), a) {
-  }
+  StringKeyedSetBase(const StringKeyedSetBase& rhs, const allocator_type& a)
+      : StringKeyedSetBase(rhs.begin(), rhs.end(), rhs.key_comp(), a) {}
 
   StringKeyedSetBase(StringKeyedSetBase&& other) noexcept
       : Base(std::move(other)) {
     assert(other.empty());
   }
 
-  StringKeyedSetBase(StringKeyedSetBase&& other,
-                     const allocator_type& alloc) noexcept
+  StringKeyedSetBase(
+      StringKeyedSetBase&& other, const allocator_type& alloc) noexcept
       : Base(std::move(other), alloc) {
     assert(other.empty());
   }
 
   StringKeyedSetBase(
-    std::initializer_list<value_type> il,
-    const key_compare& comp = key_compare(),
-    const allocator_type& alloc = allocator_type())
-      : StringKeyedSetBase(il.begin(), il.end(), comp, alloc) {
-  }
+      std::initializer_list<value_type> il,
+      const key_compare& comp = key_compare(),
+      const allocator_type& alloc = allocator_type())
+      : StringKeyedSetBase(il.begin(), il.end(), comp, alloc) {}
 
   StringKeyedSetBase& operator=(const StringKeyedSetBase& other) {
     if (this == &other) {
@@ -119,16 +114,16 @@ public:
     return *this;
   }
 
-  using Base::empty;
-  using Base::size;
-  using Base::max_size;
   using Base::begin;
-  using Base::end;
   using Base::cbegin;
   using Base::cend;
-  using Base::find;
   using Base::count;
+  using Base::empty;
+  using Base::end;
+  using Base::find;
   using Base::lower_bound;
+  using Base::max_size;
+  using Base::size;
   using Base::upper_bound;
 
   bool operator==(StringKeyedSetBase const& other) const {
@@ -180,9 +175,7 @@ public:
 
   using Base::get_allocator;
 
-  void swap(StringKeyedSetBase& other) & {
-    return Base::swap(other);
-  }
+  void swap(StringKeyedSetBase& other) & { return Base::swap(other); }
 
   ~StringKeyedSetBase() {
     // Here we assume that set doesn't use keys in destructor
@@ -194,4 +187,4 @@ public:
 
 using StringKeyedSet = StringKeyedSetBase<>;
 
-} // folly
+} // namespace folly

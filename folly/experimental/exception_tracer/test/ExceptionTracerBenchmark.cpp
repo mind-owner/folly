@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -24,19 +24,21 @@
 #include <folly/experimental/exception_tracer/ExceptionTracer.h>
 #include <folly/portability/GFlags.h>
 
+#if FOLLY_HAVE_ELF && FOLLY_HAVE_DWARF
+
 void recurse(int level) {
   if (level == 0) {
     throw std::runtime_error("");
   }
   recurse(level - 1);
-  folly::doNotOptimizeAway(0);  // prevent tail recursion
+  folly::doNotOptimizeAway(0); // prevent tail recursion
 }
 
 void loop(int iters) {
   for (int i = 0; i < iters * 100; ++i) {
     try {
       recurse(100);
-    } catch (const std::exception& e) {
+    } catch (const std::exception&) {
       folly::exception_tracer::getCurrentExceptions();
     }
   }
@@ -45,14 +47,16 @@ void loop(int iters) {
 BENCHMARK(ExceptionTracer, iters) {
   std::vector<std::thread> threads;
   constexpr size_t kNumThreads = 10;
-  threads.resize(10);
+  threads.resize(kNumThreads);
   for (auto& t : threads) {
-    t = std::thread([iters] () { loop(iters); });
+    t = std::thread([iters]() { loop(iters); });
   }
   for (auto& t : threads) {
     t.join();
   }
 }
+
+#endif // FOLLY_HAVE_ELF && FOLLY_HAVE_DWARF
 
 int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,10 +17,10 @@
 #include <memory>
 #include <vector>
 
-#include <folly/Singleton.h>
 #include <folly/Benchmark.h>
-#include <folly/test/SingletonTestStructs.h>
+#include <folly/Singleton.h>
 #include <folly/portability/GTest.h>
+#include <folly/test/SingletonTestStructs.h>
 
 /*
  * This test needs to be in its own file, as a standalone program.
@@ -33,13 +33,13 @@ using namespace folly;
 
 namespace {
 Singleton<GlobalWatchdog> global_watchdog;
-}
+} // namespace
 
 // Test basic global usage (the default way singletons will generally
 // be used).
 TEST(Singleton, BasicGlobalUsage) {
   EXPECT_EQ(Watchdog::creation_order().size(), 0);
-  EXPECT_EQ(SingletonVault::singleton()->registeredSingletonCount(), 1);
+  EXPECT_GE(SingletonVault::singleton()->registeredSingletonCount(), 1);
   EXPECT_EQ(SingletonVault::singleton()->livingSingletonCount(), 0);
 
   {

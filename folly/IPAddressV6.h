@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -24,10 +24,13 @@
 #include <map>
 #include <stdexcept>
 
-#include <folly/Hash.h>
+#include <folly/Expected.h>
+#include <folly/FBString.h>
+#include <folly/IPAddressException.h>
 #include <folly/Optional.h>
 #include <folly/Range.h>
 #include <folly/detail/IPAddress.h>
+#include <folly/hash/Hash.h>
 
 namespace folly {
 
@@ -69,7 +72,9 @@ class IPAddressV6 {
  public:
   // V6 Address Type
   enum Type {
-    TEREDO, T6TO4, NORMAL,
+    TEREDO,
+    T6TO4,
+    NORMAL,
   };
   // A constructor parameter to indicate that we should create a link-local
   // IPAddressV6.
@@ -86,20 +91,30 @@ class IPAddressV6 {
 
   // Size of std::string returned by toFullyQualified.
   static constexpr size_t kToFullyQualifiedSize =
-    8 /*words*/ * 4 /*hex chars per word*/ + 7 /*separators*/;
+      8 /*words*/ * 4 /*hex chars per word*/ + 7 /*separators*/;
 
   // returns true iff the input string can be parsed as an ipv6-address
-  static bool validate(StringPiece ip);
+  static bool validate(StringPiece ip) noexcept;
 
   /**
    * Create a new IPAddress instance from the provided binary data.
    * @throws IPAddressFormatException if the input length is not 16 bytes.
    */
-  static IPAddressV6 fromBinary(ByteRange bytes) {
-    IPAddressV6 addr;
-    addr.setFromBinary(bytes);
-    return addr;
-  }
+  static IPAddressV6 fromBinary(ByteRange bytes);
+
+  /**
+   * Non-throwing version of fromBinary().
+   * On failure returns IPAddressFormatError.
+   */
+  static Expected<IPAddressV6, IPAddressFormatError> tryFromBinary(
+      ByteRange bytes) noexcept;
+
+  /**
+   * Tries to create a new IPAddressV6 instance from provided string and
+   * returns it on success. Returns IPAddressFormatError on failure.
+   */
+  static Expected<IPAddressV6, IPAddressFormatError> tryFromString(
+      StringPiece str) noexcept;
 
   /**
    * Create a new IPAddress instance from the ip6.arpa representation.
@@ -112,7 +127,7 @@ class IPAddressV6 {
    * Returns the address as a Range.
    */
   ByteRange toBinary() const {
-    return ByteRange((const unsigned char *) &addr_.in6Addr_.s6_addr, 16);
+    return ByteRange((const unsigned char*)&addr_.in6Addr_.s6_addr, 16);
   }
 
   /**
@@ -125,16 +140,16 @@ class IPAddressV6 {
   // Create an IPAddressV6 from a string
   // @throws IPAddressFormatException
   //
-  explicit IPAddressV6(StringPiece ip);
+  explicit IPAddressV6(StringPiece addr);
 
   // ByteArray16 constructor
-  explicit IPAddressV6(const ByteArray16& src);
+  explicit IPAddressV6(const ByteArray16& src) noexcept;
 
   // in6_addr constructor
-  explicit IPAddressV6(const in6_addr& src);
+  explicit IPAddressV6(const in6_addr& src) noexcept;
 
   // sockaddr_in6 constructor
-  explicit IPAddressV6(const sockaddr_in6& src);
+  explicit IPAddressV6(const sockaddr_in6& src) noexcept;
 
   /**
    * Create a link-local IPAddressV6 from the specified ethernet MAC address.
@@ -152,14 +167,10 @@ class IPAddressV6 {
   IPAddressV4 getIPv4For6To4() const;
 
   // Return true if a 6TO4 address
-  bool is6To4() const {
-    return type() == IPAddressV6::Type::T6TO4;
-  }
+  bool is6To4() const { return type() == IPAddressV6::Type::T6TO4; }
 
   // Return true if a TEREDO address
-  bool isTeredo() const {
-    return type() == IPAddressV6::Type::TEREDO;
-  }
+  bool isTeredo() const { return type() == IPAddressV6::Type::TEREDO; }
 
   // return true if this is v4-to-v6-mapped
   bool isIPv4Mapped() const;
@@ -171,7 +182,7 @@ class IPAddressV6 {
    * @see IPAddress#bitCount
    * @returns 128
    */
-  static size_t bitCount() { return 128; }
+  static constexpr size_t bitCount() { return 128; }
 
   /**
    * @see IPAddress#toJson
@@ -188,16 +199,14 @@ class IPAddressV6 {
   bool inSubnet(const IPAddressV6& subnet, uint8_t cidr) const {
     return inSubnetWithMask(subnet, fetchMask(cidr));
   }
-  bool inSubnetWithMask(const IPAddressV6& subnet,
-                        const ByteArray16& mask) const;
+  bool inSubnetWithMask(
+      const IPAddressV6& subnet, const ByteArray16& mask) const;
 
   // @see IPAddress#isLoopback
   bool isLoopback() const;
 
   // @see IPAddress#isNonroutable
-  bool isNonroutable() const {
-    return !isRoutable();
-  }
+  bool isNonroutable() const { return !isRoutable(); }
 
   /**
    * Return true if this address is routable.
@@ -226,6 +235,16 @@ class IPAddressV6 {
    * You can use Optional::value() to check whether the mac address is not null.
    */
   Optional<MacAddress> getMacAddressFromLinkLocal() const;
+
+  /**
+   * Return the mac address if this is an auto-configured IPv6 address based on
+   * EUI-64
+   *
+   * @return an Optional<MacAddress> union representing the mac address.
+   * If the address is not based on EUI-64 it will return an empty Optional.
+   * You can use Optional::value() to check whether the mac address is not null.
+   */
+  Optional<MacAddress> getMacAddressFromEUI64() const;
 
   /**
    * Return true if this is a multicast address.
@@ -259,9 +278,7 @@ class IPAddressV6 {
   in6_addr toAddr() const { return addr_.in6Addr_; }
 
   uint16_t getScopeId() const { return scope_; }
-  void setScopeId(uint16_t scope) {
-    scope_ = scope;
-  }
+  void setScopeId(uint16_t scope) { scope_ = scope; }
 
   sockaddr_in6 toSockAddr() const {
     sockaddr_in6 addr;
@@ -305,48 +322,68 @@ class IPAddressV6 {
    * @throws abort if numBits == 0 or numBits > bitCount()
    * @return mask associated with numBits
    */
-  static const ByteArray16 fetchMask(size_t numBits);
+  static ByteArray16 fetchMask(size_t numBits);
   // Given 2 IPAddressV6,mask pairs extract the longest common IPAddress,
   // mask pair
   static CIDRNetworkV6 longestCommonPrefix(
-      const CIDRNetworkV6& one,
-      const CIDRNetworkV6& two);
+      const CIDRNetworkV6& one, const CIDRNetworkV6& two);
   // Number of bytes in the address representation.
   static constexpr size_t byteCount() { return 16; }
 
-  //get nth most significant bit - 0 indexed
+  // get nth most significant bit - 0 indexed
   bool getNthMSBit(size_t bitIndex) const {
     return detail::getNthMSBitImpl(*this, bitIndex, AF_INET6);
   }
-  //get nth most significant byte - 0 indexed
+  // get nth most significant byte - 0 indexed
   uint8_t getNthMSByte(size_t byteIndex) const;
-  //get nth bit - 0 indexed
+  // get nth bit - 0 indexed
   bool getNthLSBit(size_t bitIndex) const {
     return getNthMSBit(bitCount() - bitIndex - 1);
   }
-  //get nth byte - 0 indexed
+  // get nth byte - 0 indexed
   uint8_t getNthLSByte(size_t byteIndex) const {
     return getNthMSByte(byteCount() - byteIndex - 1);
   }
 
   const unsigned char* bytes() const { return addr_.in6Addr_.s6_addr; }
-  protected:
+
+ protected:
   /**
    * Helper that returns true if the address is in the binary subnet specified
    * by addr.
    */
-  bool inBinarySubnet(const std::array<uint8_t, 2> addr,
-                      size_t numBits) const;
+  bool inBinarySubnet(const std::array<uint8_t, 2> addr, size_t numBits) const;
+
+ private:
+  auto tie() const { return std::tie(addr_.bytes_, scope_); }
+
+ public:
+  friend inline bool operator==(const IPAddressV6& a, const IPAddressV6& b) {
+    return a.tie() == b.tie();
+  }
+  friend inline bool operator!=(const IPAddressV6& a, const IPAddressV6& b) {
+    return a.tie() != b.tie();
+  }
+  friend inline bool operator<(const IPAddressV6& a, const IPAddressV6& b) {
+    return a.tie() < b.tie();
+  }
+  friend inline bool operator>(const IPAddressV6& a, const IPAddressV6& b) {
+    return a.tie() > b.tie();
+  }
+  friend inline bool operator<=(const IPAddressV6& a, const IPAddressV6& b) {
+    return a.tie() <= b.tie();
+  }
+  friend inline bool operator>=(const IPAddressV6& a, const IPAddressV6& b) {
+    return a.tie() >= b.tie();
+  }
 
  private:
   union AddressStorage {
     in6_addr in6Addr_;
     ByteArray16 bytes_;
-    AddressStorage() {
-      std::memset(this, 0, sizeof(AddressStorage));
-    }
-    explicit AddressStorage(const ByteArray16& bytes): bytes_(bytes) {}
-    explicit AddressStorage(const in6_addr& addr): in6Addr_(addr) {}
+    AddressStorage() { std::memset(this, 0, sizeof(AddressStorage)); }
+    explicit AddressStorage(const ByteArray16& bytes) : bytes_(bytes) {}
+    explicit AddressStorage(const in6_addr& addr) : in6Addr_(addr) {}
     explicit AddressStorage(MacAddress mac);
   } addr_;
 
@@ -354,13 +391,12 @@ class IPAddressV6 {
   // are *not* link-local.
   uint16_t scope_{0};
 
-  static const std::array<ByteArray16, 129> masks_;
-
   /**
    * Set the current IPAddressV6 object to have the address specified by bytes.
-   * @throws IPAddressFormatException if bytes.size() is not 16.
+   * Returns IPAddressFormatError if bytes.size() is not 16.
    */
-  void setFromBinary(ByteRange bytes);
+  Expected<Unit, IPAddressFormatError> trySetFromBinary(
+      ByteRange bytes) noexcept;
 };
 
 // boost::hash uses hash_value() so this allows boost::hash to work
@@ -371,44 +407,13 @@ std::ostream& operator<<(std::ostream& os, const IPAddressV6& addr);
 void toAppend(IPAddressV6 addr, std::string* result);
 void toAppend(IPAddressV6 addr, fbstring* result);
 
-/**
- * Return true if two addresses are equal.
- */
-inline bool operator==(const IPAddressV6& addr1, const IPAddressV6& addr2) {
-  return (std::memcmp(addr1.toAddr().s6_addr, addr2.toAddr().s6_addr, 16) == 0)
-    && addr1.getScopeId() == addr2.getScopeId();
-}
-// Return true if addr1 < addr2
-inline bool operator<(const IPAddressV6& addr1, const IPAddressV6& addr2) {
-  auto cmp = std::memcmp(addr1.toAddr().s6_addr,
-                         addr2.toAddr().s6_addr, 16) < 0;
-  if (!cmp) {
-    return addr1.getScopeId() < addr2.getScopeId();
-  } else {
-    return cmp;
-  }
-}
-// Derived operators
-inline bool operator!=(const IPAddressV6& a, const IPAddressV6& b) {
-  return !(a == b);
-}
-inline bool operator>(const IPAddressV6& a, const IPAddressV6& b) {
-  return b < a;
-}
-inline bool operator<=(const IPAddressV6& a, const IPAddressV6& b) {
-  return !(a > b);
-}
-inline bool operator>=(const IPAddressV6& a, const IPAddressV6& b) {
-  return !(a < b);
-}
-
-}  // folly
+} // namespace folly
 
 namespace std {
-template<>
+template <>
 struct hash<folly::IPAddressV6> {
   size_t operator()(const folly::IPAddressV6& addr) const {
     return addr.hash();
   }
 };
-}  // std
+} // namespace std

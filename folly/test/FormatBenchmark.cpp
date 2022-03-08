@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,13 +16,18 @@
 
 #include <folly/Format.h>
 
+#include <utility>
+
 #include <glog/logging.h>
 
 #include <folly/Benchmark.h>
 #include <folly/FBVector.h>
+#include <folly/Utility.h>
 #include <folly/dynamic.h>
 #include <folly/init/Init.h>
 #include <folly/json.h>
+
+FOLLY_GNU_DISABLE_WARNING("-Wdeprecated-declarations")
 
 using namespace folly;
 
@@ -56,7 +61,7 @@ BENCHMARK_RELATIVE(octal_uintToOctal, iters) {
   }
 }
 
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
 
 BENCHMARK(hex_snprintf, iters) {
   while (iters--) {
@@ -72,7 +77,7 @@ BENCHMARK_RELATIVE(hex_uintToHex, iters) {
   }
 }
 
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
 
 BENCHMARK(intAppend_snprintf) {
   fbstring out;
@@ -96,7 +101,7 @@ BENCHMARK_RELATIVE(intAppend_format) {
   }
 }
 
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
 
 template <size_t... Indexes>
 int snprintf20Numbers(int i, std::index_sequence<Indexes...>) {
@@ -148,7 +153,7 @@ BENCHMARK_RELATIVE(bigFormat_format, iters) {
   }
 }
 
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
 
 BENCHMARK(format_nested_strings, iters) {
   BenchmarkSuspender suspender;
@@ -159,24 +164,8 @@ BENCHMARK(format_nested_strings, iters) {
         format(
             &out,
             "{} {}",
-            format("{} {}", i, i + 1).str(),
-            format("{} {}", -i, -i - 1).str());
-      });
-    }
-  }
-}
-
-BENCHMARK_RELATIVE(format_nested_fbstrings, iters) {
-  BenchmarkSuspender suspender;
-  while (iters--) {
-    for (int i = 0; i < 1000; ++i) {
-      fbstring out;
-      suspender.dismissing([&] {
-        format(
-            &out,
-            "{} {}",
-            format("{} {}", i, i + 1).fbstr(),
-            format("{} {}", -i, -i - 1).fbstr());
+            sformat("{} {}", i, i + 1),
+            sformat("{} {}", -i, -i - 1));
       });
     }
   }
@@ -198,7 +187,7 @@ BENCHMARK_RELATIVE(format_nested_direct, iters) {
   }
 }
 
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
 
 BENCHMARK(copy_short_string, iters) {
   BenchmarkSuspender suspender;
@@ -245,7 +234,7 @@ BENCHMARK_RELATIVE(sformat_short_string_safe, iters) {
   }
 }
 
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
 
 BENCHMARK(copy_long_string, iters) {
   BenchmarkSuspender suspender;
@@ -311,7 +300,6 @@ BENCHMARK_RELATIVE(sformat_long_string_safe, iters) {
 // bigFormat_format                                  90.41%   196.91us    5.08K
 // ----------------------------------------------------------------------------
 // format_nested_strings                                      317.65us    3.15K
-// format_nested_fbstrings                           99.89%   318.01us    3.14K
 // format_nested_direct                             116.52%   272.62us    3.67K
 // ----------------------------------------------------------------------------
 // copy_short_string                                           28.33ns   35.30M

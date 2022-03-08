@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,11 +19,12 @@
 #include <chrono>
 #include <string>
 
-#include <folly/Baton.h>
 #include <folly/Optional.h>
-#include <folly/ThreadName.h>
+#include <folly/futures/Promise.h>
 #include <folly/io/async/EventBaseManager.h>
 #include <folly/portability/GTest.h>
+#include <folly/synchronization/Baton.h>
+#include <folly/system/ThreadName.h>
 
 using namespace std;
 using namespace std::chrono;
@@ -36,7 +37,7 @@ TEST_F(ScopedEventBaseThreadTest, example) {
 
   Baton<> done;
   sebt.getEventBase()->runInEventBaseThread([&] { done.post(); });
-  ASSERT_TRUE(done.timed_wait(seconds(1)));
+  ASSERT_TRUE(done.try_wait_for(seconds(1)));
 }
 
 TEST_F(ScopedEventBaseThreadTest, named_example) {
@@ -51,7 +52,7 @@ TEST_F(ScopedEventBaseThreadTest, named_example) {
     done.post();
   });
 
-  ASSERT_TRUE(done.timed_wait(seconds(1)));
+  ASSERT_TRUE(done.try_wait_for(seconds(1)));
   if (createdThreadName) {
     ASSERT_EQ(kThreadName.toString(), createdThreadName.value());
   }
@@ -83,8 +84,32 @@ TEST_F(ScopedEventBaseThreadTest, eb_dtor_in_io_thread) {
 
   auto const eb = sebt->getEventBase();
   thread::id eb_dtor_thread_id;
-  eb->runOnDestruction(new EventBase::FunctionLoopCallback(
-      [&] { eb_dtor_thread_id = this_thread::get_id(); }));
-  sebt.clear();
+  eb->runOnDestruction([&] { eb_dtor_thread_id = std::this_thread::get_id(); });
+  sebt.reset();
   EXPECT_EQ(io_thread_id, eb_dtor_thread_id);
+}
+
+TEST_F(ScopedEventBaseThreadTest, keepalive) {
+  Baton<> started, done, reset;
+  folly::Executor::KeepAlive<> ex;
+  Promise<Unit> p;
+
+  std::thread t1([&] {
+    ScopedEventBaseThread sebt;
+    ex = &sebt;
+    started.post();
+  });
+
+  std::thread t2([&] {
+    started.wait();
+    p.getSemiFuture().via(ex).thenValue([&, ex](auto&&) { done.post(); });
+    ex.reset();
+    reset.post();
+  });
+
+  reset.wait();
+  p.setValue();
+  ASSERT_TRUE(done.try_wait_for(seconds(1)));
+  t1.join();
+  t2.join();
 }

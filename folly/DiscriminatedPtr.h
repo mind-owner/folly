@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -28,13 +28,15 @@
 
 #include <limits>
 #include <stdexcept>
+
 #include <glog/logging.h>
+
 #include <folly/Likely.h>
 #include <folly/Portability.h>
 #include <folly/detail/DiscriminatedPtrDetail.h>
 
-#if !FOLLY_X64 && !FOLLY_A64 && !FOLLY_PPC64
-# error "DiscriminatedPtr is x64, arm64 and ppc64 specific code."
+#if !FOLLY_X64 && !FOLLY_AARCH64 && !FOLLY_PPC64
+#error "DiscriminatedPtr is x64, arm64 and ppc64 specific code."
 #endif
 
 namespace folly {
@@ -54,15 +56,15 @@ namespace folly {
 template <typename... Types>
 class DiscriminatedPtr {
   // <, not <=, as our indexes are 1-based (0 means "empty")
-  static_assert(sizeof...(Types) < std::numeric_limits<uint16_t>::max(),
-                "too many types");
+  static_assert(
+      sizeof...(Types) < std::numeric_limits<uint16_t>::max(),
+      "too many types");
 
  public:
   /**
    * Create an empty DiscriminatedPtr.
    */
-  DiscriminatedPtr() : data_(0) {
-  }
+  DiscriminatedPtr() : data_(0) {}
 
   /**
    * Create a DiscriminatedPtr that points to an object of type T.
@@ -125,9 +127,7 @@ class DiscriminatedPtr {
   /**
    * Return true iff this DiscriminatedPtr is empty.
    */
-  bool empty() const {
-    return index() == 0;
-  }
+  bool empty() const { return index() == 0; }
 
   /**
    * Return true iff the object pointed by this DiscriminatedPtr has type T,
@@ -142,9 +142,7 @@ class DiscriminatedPtr {
   /**
    * Clear this DiscriminatedPtr, making it empty.
    */
-  void clear() {
-    data_ = 0;
-  }
+  void clear() { data_ = 0; }
 
   /**
    * Assignment operator from a pointer of type T.
@@ -171,18 +169,22 @@ class DiscriminatedPtr {
   template <typename V>
   typename dptr_detail::VisitorResult<V, Types...>::type apply(V&& visitor) {
     size_t n = index();
-    if (n == 0) throw std::invalid_argument("Empty DiscriminatedPtr");
+    if (n == 0) {
+      throw std::invalid_argument("Empty DiscriminatedPtr");
+    }
     return dptr_detail::ApplyVisitor<V, Types...>()(
-      n, std::forward<V>(visitor), ptr());
+        n, std::forward<V>(visitor), ptr());
   }
 
   template <typename V>
-  typename dptr_detail::ConstVisitorResult<V, Types...>::type apply(V&& visitor)
-  const {
+  typename dptr_detail::ConstVisitorResult<V, Types...>::type apply(
+      V&& visitor) const {
     size_t n = index();
-    if (n == 0) throw std::invalid_argument("Empty DiscriminatedPtr");
+    if (n == 0) {
+      throw std::invalid_argument("Empty DiscriminatedPtr");
+    }
     return dptr_detail::ApplyConstVisitor<V, Types...>()(
-      n, std::forward<V>(visitor), ptr());
+        n, std::forward<V>(visitor), ptr());
   }
 
  private:
@@ -217,23 +219,20 @@ class DiscriminatedPtr {
 
 template <typename Visitor, typename... Args>
 decltype(auto) apply_visitor(
-    Visitor&& visitor,
-    const DiscriminatedPtr<Args...>& variant) {
+    Visitor&& visitor, const DiscriminatedPtr<Args...>& variant) {
   return variant.apply(std::forward<Visitor>(visitor));
 }
 
 template <typename Visitor, typename... Args>
 decltype(auto) apply_visitor(
-    Visitor&& visitor,
-    DiscriminatedPtr<Args...>& variant) {
+    Visitor&& visitor, DiscriminatedPtr<Args...>& variant) {
   return variant.apply(std::forward<Visitor>(visitor));
 }
 
 template <typename Visitor, typename... Args>
 decltype(auto) apply_visitor(
-    Visitor&& visitor,
-    DiscriminatedPtr<Args...>&& variant) {
+    Visitor&& visitor, DiscriminatedPtr<Args...>&& variant) {
   return variant.apply(std::forward<Visitor>(visitor));
 }
 
-}  // namespace folly
+} // namespace folly

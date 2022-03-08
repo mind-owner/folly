@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,30 +19,30 @@
 #include <sys/types.h>
 
 #include <algorithm>
-#include <deque>
 #include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <utility>
 
+#include <boost/intrusive/slist.hpp>
+#include <glog/logging.h>
+
 #include <folly/Exception.h>
 #include <folly/FileUtil.h>
-#include <folly/io/async/EventBase.h>
-#include <folly/io/async/EventHandler.h>
-#include <folly/io/async/DelayedDestruction.h>
-#include <folly/io/async/Request.h>
 #include <folly/Likely.h>
 #include <folly/ScopeGuard.h>
 #include <folly/SpinLock.h>
+#include <folly/io/async/DelayedDestruction.h>
+#include <folly/io/async/EventBase.h>
+#include <folly/io/async/EventHandler.h>
+#include <folly/io/async/Request.h>
 #include <folly/portability/Fcntl.h>
 #include <folly/portability/Sockets.h>
 #include <folly/portability/Unistd.h>
+#include <folly/system/Pid.h>
 
-#include <glog/logging.h>
-
-#if __linux__ && !__ANDROID__
-#define FOLLY_HAVE_EVENTFD
-#include <folly/io/async/EventFDWrapper.h>
+#if __has_include(<sys/eventfd.h>)
+#include <sys/eventfd.h>
 #endif
 
 namespace folly {
@@ -65,25 +65,35 @@ namespace folly {
  * spinning trying to move a message off the queue and failing, and then
  * retrying.
  */
-template<typename MessageT>
+template <typename MessageT>
 class NotificationQueue {
+  struct Node : public boost::intrusive::slist_base_hook<
+                    boost::intrusive::cache_last<true>> {
+    template <typename MessageTT>
+    Node(MessageTT&& msg, std::shared_ptr<RequestContext> ctx)
+        : msg_(std::forward<MessageTT>(msg)), ctx_(std::move(ctx)) {}
+    MessageT msg_;
+    std::shared_ptr<RequestContext> ctx_;
+  };
+
  public:
   /**
    * A callback interface for consuming messages from the queue as they arrive.
    */
   class Consumer : public DelayedDestruction, private EventHandler {
    public:
+    using UniquePtr = DelayedDestructionUniquePtr<Consumer>;
+
     enum : uint16_t { kDefaultMaxReadAtOnce = 10 };
 
     Consumer()
-      : queue_(nullptr),
-        destroyedFlagPtr_(nullptr),
-        maxReadAtOnce_(kDefaultMaxReadAtOnce) {}
+        : queue_(nullptr),
+          destroyedFlagPtr_(nullptr),
+          maxReadAtOnce_(kDefaultMaxReadAtOnce) {}
 
     // create a consumer in-place, without the need to build new class
     template <typename TCallback>
-    static std::unique_ptr<Consumer, DelayedDestruction::Destructor> make(
-        TCallback&& callback);
+    static UniquePtr make(TCallback&& callback);
 
     /**
      * messageAvailable() will be invoked whenever a new
@@ -141,9 +151,7 @@ class NotificationQueue {
      * messages from.  Returns nullptr if the consumer is not currently
      * consuming events from any queue.
      */
-    NotificationQueue* getCurrentQueue() const {
-      return queue_;
-    }
+    NotificationQueue* getCurrentQueue() const { return queue_; }
 
     /**
      * Set a limit on how many messages this consumer will read each iteration
@@ -155,28 +163,21 @@ class NotificationQueue {
      * A limit of 0 means no limit will be enforced.  If unset, the limit
      * defaults to kDefaultMaxReadAtOnce (defined to 10 above).
      */
-    void setMaxReadAtOnce(uint32_t maxAtOnce) {
-      maxReadAtOnce_ = maxAtOnce;
-    }
-    uint32_t getMaxReadAtOnce() const {
-      return maxReadAtOnce_;
-    }
+    void setMaxReadAtOnce(uint32_t maxAtOnce) { maxReadAtOnce_ = maxAtOnce; }
+    uint32_t getMaxReadAtOnce() const { return maxReadAtOnce_; }
 
-    EventBase* getEventBase() {
-      return base_;
-    }
+    EventBase* getEventBase() { return base_; }
 
     void handlerReady(uint16_t events) noexcept override;
 
    protected:
-
     void destroy() override;
 
     ~Consumer() override {}
 
    private:
     /**
-     * Consume messages off the the queue until
+     * Consume messages off the queue until
      *   - the queue is empty (1), or
      *   - until the consumer is destroyed, or
      *   - until the consumer is uninstalled, or
@@ -220,23 +221,22 @@ class NotificationQueue {
       ++queue_.numConsumers_;
     }
 
-    ~SimpleConsumer() {
-      --queue_.numConsumers_;
-    }
+    ~SimpleConsumer() { --queue_.numConsumers_; }
 
     int getFd() const {
       return queue_.eventfd_ >= 0 ? queue_.eventfd_ : queue_.pipeFds_[0];
     }
+
+    template <typename F>
+    void consume(F&& f);
 
    private:
     NotificationQueue& queue_;
   };
 
   enum class FdType {
-    PIPE,
-#ifdef FOLLY_HAVE_EVENTFD
+    PIPE = 1,
     EVENTFD,
-#endif
   };
 
   /**
@@ -254,21 +254,19 @@ class NotificationQueue {
    * In this case the code will fall back to using a pipe, the parameter is
    * mostly for testing purposes.
    */
-  explicit NotificationQueue(uint32_t maxSize = 0,
-#ifdef FOLLY_HAVE_EVENTFD
-                             FdType fdType = FdType::EVENTFD)
-#else
-                             FdType fdType = FdType::PIPE)
-#endif
+  explicit NotificationQueue(
+      uint32_t maxSize = 0, FdType fdType = FdType::EVENTFD)
       : eventfd_(-1),
         pipeFds_{-1, -1},
         advisoryMaxQueueSize_(maxSize),
-        pid_(pid_t(getpid())),
-        queue_() {
+        pid_(folly::get_cached_pid()) {
+#if !__has_include(<sys/eventfd.h>)
+    if (fdType == FdType::EVENTFD) {
+      fdType = FdType::PIPE;
+    }
+#endif
 
-    RequestContext::saveContext();
-
-#ifdef FOLLY_HAVE_EVENTFD
+#if __has_include(<sys/eventfd.h>)
     if (fdType == FdType::EVENTFD) {
       eventfd_ = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
       if (eventfd_ == -1) {
@@ -280,26 +278,33 @@ class NotificationQueue {
           fdType = FdType::PIPE;
         } else {
           // some other error
-          folly::throwSystemError("Failed to create eventfd for "
-                                  "NotificationQueue", errno);
+          folly::throwSystemError(
+              "Failed to create eventfd for "
+              "NotificationQueue",
+              errno);
         }
       }
     }
 #endif
+
     if (fdType == FdType::PIPE) {
       if (pipe(pipeFds_)) {
-        folly::throwSystemError("Failed to create pipe for NotificationQueue",
-                                errno);
+        folly::throwSystemError(
+            "Failed to create pipe for NotificationQueue", errno);
       }
       try {
         // put both ends of the pipe into non-blocking mode
         if (fcntl(pipeFds_[0], F_SETFL, O_RDONLY | O_NONBLOCK) != 0) {
-          folly::throwSystemError("failed to put NotificationQueue pipe read "
-                                  "endpoint into non-blocking mode", errno);
+          folly::throwSystemError(
+              "failed to put NotificationQueue pipe read "
+              "endpoint into non-blocking mode",
+              errno);
         }
         if (fcntl(pipeFds_[1], F_SETFL, O_WRONLY | O_NONBLOCK) != 0) {
-          folly::throwSystemError("failed to put NotificationQueue pipe write "
-                                  "endpoint into non-blocking mode", errno);
+          folly::throwSystemError(
+              "failed to put NotificationQueue pipe write "
+              "endpoint into non-blocking mode",
+              errno);
         }
       } catch (...) {
         ::close(pipeFds_[0]);
@@ -310,6 +315,11 @@ class NotificationQueue {
   }
 
   ~NotificationQueue() {
+    std::unique_ptr<Node> data;
+    while (!queue_.empty()) {
+      data.reset(&queue_.front());
+      queue_.pop_front();
+    }
     if (eventfd_ >= 0) {
       ::close(eventfd_);
       eventfd_ = -1;
@@ -332,9 +342,7 @@ class NotificationQueue {
    * message on the queue, ignoring the configured maximum queue size.  This
    * can cause the queue size to exceed the configured maximum.
    */
-  void setMaxQueueSize(uint32_t max) {
-    advisoryMaxQueueSize_ = max;
-  }
+  void setMaxQueueSize(uint32_t max) { advisoryMaxQueueSize_ = max; }
 
   /**
    * Attempt to put a message on the queue if the queue is not already full.
@@ -352,11 +360,9 @@ class NotificationQueue {
    * may throw any other exception thrown by the MessageT move/copy
    * constructor.
    */
-  void tryPutMessage(MessageT&& message) {
-    putMessageImpl(std::move(message), advisoryMaxQueueSize_);
-  }
-  void tryPutMessage(const MessageT& message) {
-    putMessageImpl(message, advisoryMaxQueueSize_);
+  template <typename MessageTT>
+  void tryPutMessage(MessageTT&& message) {
+    putMessageImpl(std::forward<MessageTT>(message), advisoryMaxQueueSize_);
   }
 
   /**
@@ -367,11 +373,10 @@ class NotificationQueue {
    * (which indicates that the queue is being drained) are prevented from being
    * thrown. User code must still catch std::bad_alloc errors.
    */
-  bool tryPutMessageNoThrow(MessageT&& message) {
-    return putMessageImpl(std::move(message), advisoryMaxQueueSize_, false);
-  }
-  bool tryPutMessageNoThrow(const MessageT& message) {
-    return putMessageImpl(message, advisoryMaxQueueSize_, false);
+  template <typename MessageTT>
+  bool tryPutMessageNoThrow(MessageTT&& message) {
+    return putMessageImpl(
+        std::forward<MessageTT>(message), advisoryMaxQueueSize_, false);
   }
 
   /**
@@ -386,20 +391,18 @@ class NotificationQueue {
    *   - std::runtime_error if the queue is currently draining
    *   - any other exception thrown by the MessageT move/copy constructor.
    */
-  void putMessage(MessageT&& message) {
-    putMessageImpl(std::move(message), 0);
-  }
-  void putMessage(const MessageT& message) {
-    putMessageImpl(message, 0);
+  template <typename MessageTT>
+  void putMessage(MessageTT&& message) {
+    putMessageImpl(std::forward<MessageTT>(message), 0);
   }
 
   /**
    * Put several messages on the queue.
    */
-  template<typename InputIteratorT>
+  template <typename InputIteratorT>
   void putMessages(InputIteratorT first, InputIteratorT last) {
     typedef typename std::iterator_traits<InputIteratorT>::iterator_category
-      IterCategory;
+        IterCategory;
     putMessagesImpl(first, last, IterCategory());
   }
 
@@ -416,24 +419,27 @@ class NotificationQueue {
     SCOPE_EXIT { syncSignalAndQueue(); };
 
     checkPid();
+    std::unique_ptr<Node> data;
 
-    folly::SpinLockGuard g(spinlock_);
+    {
+      std::unique_lock<SpinLock> g(spinlock_);
 
-    if (UNLIKELY(queue_.empty())) {
-      return false;
+      if (UNLIKELY(queue_.empty())) {
+        return false;
+      }
+
+      data.reset(&queue_.front());
+      queue_.pop_front();
     }
 
-    auto& data = queue_.front();
-    result = std::move(data.first);
-    RequestContext::setContext(std::move(data.second));
-
-    queue_.pop_front();
+    result = std::move(data->msg_);
+    RequestContext::setContext(std::move(data->ctx_));
 
     return true;
   }
 
   size_t size() const {
-    folly::SpinLockGuard g(spinlock_);
+    std::unique_lock<SpinLock> g(spinlock_);
     return queue_.size();
   }
 
@@ -450,37 +456,36 @@ class NotificationQueue {
    * check ensures that we catch the problem in the misbehaving child process
    * code, and crash before signalling the parent process.
    */
-  void checkPid() const { CHECK_EQ(pid_, pid_t(getpid())); }
+  void checkPid() const {
+    if (FOLLY_UNLIKELY(pid_ != folly::get_cached_pid())) {
+      checkPidFail();
+    }
+  }
 
  private:
   // Forbidden copy constructor and assignment operator
-  NotificationQueue(NotificationQueue const &) = delete;
-  NotificationQueue& operator=(NotificationQueue const &) = delete;
+  NotificationQueue(NotificationQueue const&) = delete;
+  NotificationQueue& operator=(NotificationQueue const&) = delete;
 
-  inline bool checkQueueSize(size_t maxSize, bool throws=true) const {
+  inline bool checkQueueSize(size_t maxSize, bool throws = true) const {
     DCHECK(0 == spinlock_.try_lock());
     if (maxSize > 0 && queue_.size() >= maxSize) {
       if (throws) {
-        throw std::overflow_error("unable to add message to NotificationQueue: "
-                                  "queue is full");
+        throw std::overflow_error(
+            "unable to add message to NotificationQueue: "
+            "queue is full");
       }
       return false;
     }
     return true;
   }
 
-  inline bool checkDraining(bool throws=true) {
+  inline bool checkDraining(bool throws = true) {
     if (UNLIKELY(draining_ && throws)) {
       throw std::runtime_error("queue is draining, cannot add message");
     }
     return draining_;
   }
-
-#ifdef __ANDROID__
-  // TODO 10860938 Remove after figuring out crash
-  mutable std::atomic<int> eventBytes_{0};
-  mutable std::atomic<int> maxEventBytes_{0};
-#endif
 
   void ensureSignalLocked() const {
     // semantics: empty fd == empty queue <=> !signal_
@@ -504,23 +509,13 @@ class NotificationQueue {
       }
     } while (bytes_written == -1 && errno == EINTR);
 
-#ifdef __ANDROID__
-    if (bytes_written > 0) {
-      eventBytes_ += bytes_written;
-      maxEventBytes_ = std::max((int)maxEventBytes_, (int)eventBytes_);
-    }
-#endif
-
     if (bytes_written == ssize_t(bytes_expected)) {
       signal_ = true;
     } else {
-#ifdef __ANDROID__
-      LOG(ERROR) << "NotificationQueue Write Error=" << errno
-                 << " bytesInPipe=" << eventBytes_
-                 << " maxInPipe=" << maxEventBytes_ << " queue=" << size();
-#endif
-      folly::throwSystemError("failed to signal NotificationQueue after "
-                              "write", errno);
+      folly::throwSystemError(
+          "failed to signal NotificationQueue after "
+          "write",
+          errno);
     }
   }
 
@@ -531,37 +526,33 @@ class NotificationQueue {
       bytes_read = readNoInt(eventfd_, &message, sizeof(message));
       CHECK(bytes_read != -1 || errno == EAGAIN);
     } else {
-      // There should only be one byte in the pipe. To avoid potential leaks we still drain.
+      // There should only be one byte in the pipe. To avoid potential leaks we
+      // still drain.
       uint8_t message[32];
       ssize_t result;
-      while ((result = readNoInt(pipeFds_[0], &message, sizeof(message))) != -1) {
+      while ((result = readNoInt(pipeFds_[0], &message, sizeof(message))) !=
+             -1) {
         bytes_read += result;
       }
       CHECK(result == -1 && errno == EAGAIN);
       LOG_IF(ERROR, bytes_read > 1)
-        << "[NotificationQueue] Unexpected state while draining pipe: bytes_read="
-        << bytes_read << " bytes, expected <= 1";
+          << "[NotificationQueue] Unexpected state while draining pipe: bytes_read="
+          << bytes_read << " bytes, expected <= 1";
     }
     LOG_IF(ERROR, (signal_ && bytes_read == 0) || (!signal_ && bytes_read > 0))
-      << "[NotificationQueue] Unexpected state while draining signals: signal_="
-      << signal_ << " bytes_read=" << bytes_read;
+        << "[NotificationQueue] Unexpected state while draining signals: signal_="
+        << signal_ << " bytes_read=" << bytes_read;
 
     signal_ = false;
-
-#ifdef __ANDROID__
-    if (bytes_read > 0) {
-      eventBytes_ -= bytes_read;
-    }
-#endif
   }
 
   void ensureSignal() const {
-    folly::SpinLockGuard g(spinlock_);
+    std::unique_lock<SpinLock> g(spinlock_);
     ensureSignalLocked();
   }
 
   void syncSignalAndQueue() {
-    folly::SpinLockGuard g(spinlock_);
+    std::unique_lock<SpinLock> g(spinlock_);
 
     if (queue_.empty()) {
       drainSignalsLocked();
@@ -570,11 +561,14 @@ class NotificationQueue {
     }
   }
 
-  bool putMessageImpl(MessageT&& message, size_t maxSize, bool throws=true) {
+  template <typename MessageTT>
+  bool putMessageImpl(MessageTT&& message, size_t maxSize, bool throws = true) {
     checkPid();
     bool signal = false;
     {
-      folly::SpinLockGuard g(spinlock_);
+      auto data = std::make_unique<Node>(
+          std::forward<MessageTT>(message), RequestContext::saveContext());
+      std::unique_lock<SpinLock> g(spinlock_);
       if (checkDraining(throws) || !checkQueueSize(maxSize, throws)) {
         return false;
       }
@@ -583,7 +577,7 @@ class NotificationQueue {
       if (numActiveConsumers_ < numConsumers_) {
         signal = true;
       }
-      queue_.emplace_back(std::move(message), RequestContext::saveContext());
+      queue_.push_back(*data.release());
       if (signal) {
         ensureSignalLocked();
       }
@@ -591,47 +585,43 @@ class NotificationQueue {
     return true;
   }
 
-  bool putMessageImpl(
-    const MessageT& message, size_t maxSize, bool throws=true) {
+  template <typename InputIteratorT>
+  void putMessagesImpl(
+      InputIteratorT first, InputIteratorT last, std::input_iterator_tag) {
     checkPid();
     bool signal = false;
-    {
-      folly::SpinLockGuard g(spinlock_);
-      if (checkDraining(throws) || !checkQueueSize(maxSize, throws)) {
-        return false;
-      }
-      if (numActiveConsumers_ < numConsumers_) {
-        signal = true;
-      }
-      queue_.emplace_back(message, RequestContext::saveContext());
-      if (signal) {
-        ensureSignalLocked();
-      }
-    }
-    return true;
-  }
-
-  template<typename InputIteratorT>
-  void putMessagesImpl(InputIteratorT first, InputIteratorT last,
-                       std::input_iterator_tag) {
-    checkPid();
-    bool signal = false;
-    size_t numAdded = 0;
-    {
-      folly::SpinLockGuard g(spinlock_);
-      checkDraining();
+    boost::intrusive::slist<Node, boost::intrusive::cache_last<true>> q;
+    try {
       while (first != last) {
-        queue_.emplace_back(*first, RequestContext::saveContext());
+        auto data = std::make_unique<Node>(
+            std::move(*first), RequestContext::saveContext());
+        q.push_back(*data.release());
         ++first;
-        ++numAdded;
       }
+      std::unique_lock<SpinLock> g(spinlock_);
+      checkDraining();
+      queue_.splice(queue_.end(), q);
       if (numActiveConsumers_ < numConsumers_) {
         signal = true;
       }
       if (signal) {
         ensureSignalLocked();
       }
+    } catch (...) {
+      std::unique_ptr<Node> data;
+      while (!q.empty()) {
+        data.reset(&q.front());
+        q.pop_front();
+      }
+      throw;
     }
+  }
+
+  FOLLY_NOINLINE void checkPidFail() const {
+    folly::terminate_with<std::runtime_error>(
+        "Pid mismatch. Pid = " +
+        folly::to<std::string>(folly::get_cached_pid()) + ". Expecting " +
+        folly::to<std::string>(pid_));
   }
 
   mutable folly::SpinLock spinlock_;
@@ -640,13 +630,13 @@ class NotificationQueue {
   int pipeFds_[2]; // to fallback to on older/non-linux systems
   uint32_t advisoryMaxQueueSize_;
   pid_t pid_;
-  std::deque<std::pair<MessageT, std::shared_ptr<RequestContext>>> queue_;
+  boost::intrusive::slist<Node, boost::intrusive::cache_last<true>> queue_;
   int numConsumers_{0};
   std::atomic<int> numActiveConsumers_{0};
   bool draining_{false};
 };
 
-template<typename MessageT>
+template <typename MessageT>
 void NotificationQueue<MessageT>::Consumer::destroy() {
   // If we are in the middle of a call to handlerReady(), destroyedFlagPtr_
   // will be non-nullptr.  Mark the value that it points to, so that
@@ -659,13 +649,13 @@ void NotificationQueue<MessageT>::Consumer::destroy() {
   DelayedDestruction::destroy();
 }
 
-template<typename MessageT>
-void NotificationQueue<MessageT>::Consumer::handlerReady(uint16_t /*events*/)
-    noexcept {
+template <typename MessageT>
+void NotificationQueue<MessageT>::Consumer::handlerReady(
+    uint16_t /*events*/) noexcept {
   consumeMessages(false);
 }
 
-template<typename MessageT>
+template <typename MessageT>
 void NotificationQueue<MessageT>::Consumer::consumeMessages(
     bool isDrain, size_t* numConsumed) noexcept {
   DestructorGuard dg(this);
@@ -703,10 +693,8 @@ void NotificationQueue<MessageT>::Consumer::consumeMessages(
       }
 
       // Pull a message off the queue.
-      auto& data = queue_->queue_.front();
-
-      MessageT msg(std::move(data.first));
-      RequestContextScopeGuard rctx(std::move(data.second));
+      std::unique_ptr<Node> data;
+      data.reset(&queue_->queue_.front());
       queue_->queue_.pop_front();
 
       // Check to see if the queue is empty now.
@@ -719,14 +707,19 @@ void NotificationQueue<MessageT>::Consumer::consumeMessages(
 
       // Now unlock the spinlock before we invoke the callback.
       queue_->spinlock_.unlock();
+      RequestContextScopeGuard rctx(std::move(data->ctx_));
+
       locked = false;
 
       // Call the callback
       bool callbackDestroyed = false;
       CHECK(destroyedFlagPtr_ == nullptr);
       destroyedFlagPtr_ = &callbackDestroyed;
-      messageAvailable(std::move(msg));
+      messageAvailable(std::move(data->msg_));
       destroyedFlagPtr_ = nullptr;
+
+      // Make sure message destructor is called with the correct RequestContext.
+      data.reset();
 
       // If the callback was destroyed before it returned, we are done
       if (callbackDestroyed) {
@@ -740,8 +733,7 @@ void NotificationQueue<MessageT>::Consumer::consumeMessages(
 
       // If we have hit maxReadAtOnce_, we are done.
       ++numProcessed;
-      if (!isDrain && maxReadAtOnce_ > 0 &&
-          numProcessed >= maxReadAtOnce_) {
+      if (!isDrain && maxReadAtOnce_ > 0 && numProcessed >= maxReadAtOnce_) {
         return;
       }
 
@@ -775,10 +767,9 @@ void NotificationQueue<MessageT>::Consumer::consumeMessages(
   }
 }
 
-template<typename MessageT>
+template <typename MessageT>
 void NotificationQueue<MessageT>::Consumer::init(
-    EventBase* eventBase,
-    NotificationQueue* queue) {
+    EventBase* eventBase, NotificationQueue* queue) {
   eventBase->dcheckIsInEventBaseThread();
   assert(queue_ == nullptr);
   assert(!isHandlerRegistered());
@@ -789,19 +780,19 @@ void NotificationQueue<MessageT>::Consumer::init(
   queue_ = queue;
 
   {
-    folly::SpinLockGuard g(queue_->spinlock_);
+    std::unique_lock<SpinLock> g(queue_->spinlock_);
     queue_->numConsumers_++;
   }
   queue_->ensureSignal();
 
   if (queue_->eventfd_ >= 0) {
-    initHandler(eventBase, queue_->eventfd_);
+    initHandler(eventBase, folly::NetworkSocket::fromFd(queue_->eventfd_));
   } else {
-    initHandler(eventBase, queue_->pipeFds_[0]);
+    initHandler(eventBase, folly::NetworkSocket::fromFd(queue_->pipeFds_[0]));
   }
 }
 
-template<typename MessageT>
+template <typename MessageT>
 void NotificationQueue<MessageT>::Consumer::stopConsuming() {
   if (queue_ == nullptr) {
     assert(!isHandlerRegistered());
@@ -809,7 +800,7 @@ void NotificationQueue<MessageT>::Consumer::stopConsuming() {
   }
 
   {
-    folly::SpinLockGuard g(queue_->spinlock_);
+    std::unique_lock<SpinLock> g(queue_->spinlock_);
     queue_->numConsumers_--;
     setActive(false);
   }
@@ -820,12 +811,12 @@ void NotificationQueue<MessageT>::Consumer::stopConsuming() {
   queue_ = nullptr;
 }
 
-template<typename MessageT>
+template <typename MessageT>
 bool NotificationQueue<MessageT>::Consumer::consumeUntilDrained(
     size_t* numConsumed) noexcept {
   DestructorGuard dg(this);
   {
-    folly::SpinLockGuard g(queue_->spinlock_);
+    std::unique_lock<SpinLock> g(queue_->spinlock_);
     if (queue_->draining_) {
       return false;
     }
@@ -833,10 +824,35 @@ bool NotificationQueue<MessageT>::Consumer::consumeUntilDrained(
   }
   consumeMessages(true, numConsumed);
   {
-    folly::SpinLockGuard g(queue_->spinlock_);
+    std::unique_lock<SpinLock> g(queue_->spinlock_);
     queue_->draining_ = false;
   }
   return true;
+}
+
+template <typename MessageT>
+template <typename F>
+void NotificationQueue<MessageT>::SimpleConsumer::consume(F&& foreach) {
+  SCOPE_EXIT { queue_.syncSignalAndQueue(); };
+
+  queue_.checkPid();
+
+  std::unique_ptr<Node> data;
+  {
+    std::unique_lock<SpinLock> g(queue_.spinlock_);
+
+    if (UNLIKELY(queue_.queue_.empty())) {
+      return;
+    }
+
+    data.reset(&queue_.queue_.front());
+    queue_.queue_.pop_front();
+  }
+
+  RequestContextScopeGuard rctx(std::move(data->ctx_));
+  foreach(std::move(data->msg_));
+  // Make sure message destructor is called with the correct RequestContext.
+  data.reset();
 }
 
 /**
@@ -850,7 +866,6 @@ namespace detail {
 template <typename MessageT, typename TCallback>
 struct notification_queue_consumer_wrapper
     : public NotificationQueue<MessageT>::Consumer {
-
   template <typename UCallback>
   explicit notification_queue_consumer_wrapper(UCallback&& callback)
       : callback_(std::forward<UCallback>(callback)) {}
@@ -858,9 +873,8 @@ struct notification_queue_consumer_wrapper
   // we are being stricter here and requiring noexcept for callback
   void messageAvailable(MessageT&& message) noexcept override {
     static_assert(
-      noexcept(std::declval<TCallback>()(std::forward<MessageT>(message))),
-      "callback must be declared noexcept, e.g.: `[]() noexcept {}`"
-    );
+        noexcept(std::declval<TCallback>()(std::forward<MessageT>(message))),
+        "callback must be declared noexcept, e.g.: `[]() noexcept {}`");
 
     callback_(std::forward<MessageT>(message));
   }
@@ -873,15 +887,11 @@ struct notification_queue_consumer_wrapper
 
 template <typename MessageT>
 template <typename TCallback>
-std::unique_ptr<typename NotificationQueue<MessageT>::Consumer,
-                DelayedDestruction::Destructor>
-NotificationQueue<MessageT>::Consumer::make(TCallback&& callback) {
-  return std::unique_ptr<NotificationQueue<MessageT>::Consumer,
-                         DelayedDestruction::Destructor>(
-      new detail::notification_queue_consumer_wrapper<
-          MessageT,
-          typename std::decay<TCallback>::type>(
-          std::forward<TCallback>(callback)));
+auto NotificationQueue<MessageT>::Consumer::make(TCallback&& callback)
+    -> UniquePtr {
+  using CB = typename std::decay<TCallback>::type;
+  using W = detail::notification_queue_consumer_wrapper<MessageT, CB>;
+  return makeDelayedDestructionUniquePtr<W>(std::forward<TCallback>(callback));
 }
 
-} // folly
+} // namespace folly

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -35,12 +35,12 @@ namespace folly {
  * ProducerConsumerQueue is a one producer and one consumer queue
  * without locks.
  */
-template<class T>
+template <class T>
 struct ProducerConsumerQueue {
   typedef T value_type;
 
   ProducerConsumerQueue(const ProducerConsumerQueue&) = delete;
-  ProducerConsumerQueue& operator = (const ProducerConsumerQueue&) = delete;
+  ProducerConsumerQueue& operator=(const ProducerConsumerQueue&) = delete;
 
   // size must be >= 2.
   //
@@ -48,11 +48,10 @@ struct ProducerConsumerQueue {
   // given time is actually (size-1), so if you start with an empty queue,
   // isFull() will return true after size-1 insertions.
   explicit ProducerConsumerQueue(uint32_t size)
-    : size_(size)
-    , records_(static_cast<T*>(std::malloc(sizeof(T) * size)))
-    , readIndex_(0)
-    , writeIndex_(0)
-  {
+      : size_(size),
+        records_(static_cast<T*>(std::malloc(sizeof(T) * size))),
+        readIndex_(0),
+        writeIndex_(0) {
     assert(size >= 2);
     if (!records_) {
       throw std::bad_alloc();
@@ -77,7 +76,7 @@ struct ProducerConsumerQueue {
     std::free(records_);
   }
 
-  template<class ...Args>
+  template <class... Args>
   bool write(Args&&... recordArgs) {
     auto const currentWrite = writeIndex_.load(std::memory_order_relaxed);
     auto nextRecord = currentWrite + 1;
@@ -167,15 +166,20 @@ struct ProducerConsumerQueue {
     return ret;
   }
 
-private:
- char pad0_[CacheLocality::kFalseSharingRange];
- const uint32_t size_;
- T* const records_;
+  // maximum number of items in the queue.
+  size_t capacity() const { return size_ - 1; }
 
- FOLLY_ALIGN_TO_AVOID_FALSE_SHARING std::atomic<unsigned int> readIndex_;
- FOLLY_ALIGN_TO_AVOID_FALSE_SHARING std::atomic<unsigned int> writeIndex_;
+ private:
+  using AtomicIndex = std::atomic<unsigned int>;
 
- char pad1_[CacheLocality::kFalseSharingRange - sizeof(writeIndex_)];
+  char pad0_[hardware_destructive_interference_size];
+  const uint32_t size_;
+  T* const records_;
+
+  alignas(hardware_destructive_interference_size) AtomicIndex readIndex_;
+  alignas(hardware_destructive_interference_size) AtomicIndex writeIndex_;
+
+  char pad1_[hardware_destructive_interference_size - sizeof(AtomicIndex)];
 };
 
-}
+} // namespace folly

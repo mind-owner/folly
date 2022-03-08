@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,8 +17,11 @@
 #pragma once
 
 #include <functional>
+#include <set>
 #include <stdexcept>
 
+#include <folly/CPortability.h>
+#include <folly/String.h>
 #include <folly/experimental/ProgramOptions.h>
 
 namespace folly {
@@ -30,10 +33,11 @@ namespace folly {
  * empty; the message is only allowed when exiting with a non-zero status), and
  * return the exit code. (Other exceptions will propagate out of run())
  */
-class ProgramExit : public std::runtime_error {
+class FOLLY_EXPORT ProgramExit : public std::runtime_error {
  public:
   explicit ProgramExit(int status, const std::string& msg = std::string());
   int status() const { return status_; }
+
  private:
   int status_;
 };
@@ -42,18 +46,34 @@ class ProgramExit : public std::runtime_error {
  * App that uses a nested command line, of the form:
  *
  * program [--global_options...] command [--command_options...] command_args...
+ *
+ * Note: Global options (including GFlags, if added using addGFlags()) are
+ * recognized anywhere in the command line, and are prefix matched with higher
+ * priority than command options. For example, a global option named "--foobar"
+ * would be matched over a command option named "--foo", even if you specify
+ * "--foo" on the command line. You can disable prefix matching with:
+ *
+ * int style = boost::program_options::command_line_style::default_style;
+ * style &= ~boost::program_options::command_line_style::allow_guessing;
+ * app.setOptionStyle(
+ *   static_cast<boost::program_options::command_line_style::style_t>(style));
  */
 class NestedCommandLineApp {
  public:
   typedef std::function<void(
       const std::string& command,
       const boost::program_options::variables_map& options,
-      const std::vector<std::string>& args)> InitFunction;
+      const std::vector<std::string>& args)>
+      InitFunction;
 
   typedef std::function<void(
       const boost::program_options::variables_map& options,
-      const std::vector<std::string>&)> Command;
+      const std::vector<std::string>&)>
+      Command;
 
+  static constexpr StringPiece const kHelpCommand = "help";
+  static constexpr StringPiece const kShortHelpCommand = "h";
+  static constexpr StringPiece const kVersionCommand = "version";
   /**
    * Initialize the app.
    *
@@ -112,6 +132,12 @@ class NestedCommandLineApp {
   void addAlias(std::string newName, std::string oldName);
 
   /**
+   * Sets the style in which options will be accepted by the parser.
+   */
+  void setOptionStyle(
+      boost::program_options::command_line_style::style_t style);
+
+  /**
    * Run the command and return; the return code is 0 on success or
    * non-zero on error, so it is idiomatic to call this at the end of main():
    * return app.run(argc, argv);
@@ -123,6 +149,11 @@ class NestedCommandLineApp {
    */
   int run(int argc, const char* const argv[]);
   int run(const std::vector<std::string>& args);
+
+  /**
+   * Return true if name represent known built-in command (help, version)
+   */
+  bool isBuiltinCommand(const std::string& name) const;
 
  private:
   void doRun(const std::vector<std::string>& args);
@@ -136,12 +167,14 @@ class NestedCommandLineApp {
     boost::program_options::options_description options;
   };
 
-  const std::pair<const std::string, CommandInfo>&
-  findCommand(const std::string& name) const;
+  const std::pair<const std::string, CommandInfo>& findCommand(
+      const std::string& name) const;
 
   void displayHelp(
       const boost::program_options::variables_map& options,
-      const std::vector<std::string>& args);
+      const std::vector<std::string>& args) const;
+
+  void displayVersion() const;
 
   std::string programName_;
   std::string programHeading_;
@@ -149,8 +182,10 @@ class NestedCommandLineApp {
   std::string version_;
   InitFunction initFunction_;
   boost::program_options::options_description globalOptions_;
+  boost::program_options::command_line_style::style_t optionStyle_;
   std::map<std::string, CommandInfo> commands_;
   std::map<std::string, std::string> aliases_;
+  std::set<folly::StringPiece> builtinCommands_;
 };
 
-}  // namespaces
+} // namespace folly

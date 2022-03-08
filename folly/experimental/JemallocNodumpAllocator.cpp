@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,8 +17,9 @@
 #include <folly/experimental/JemallocNodumpAllocator.h>
 
 #include <folly/Conv.h>
-#include <folly/Malloc.h>
 #include <folly/String.h>
+#include <folly/memory/Malloc.h>
+
 #include <glog/logging.h>
 
 namespace folly {
@@ -151,12 +152,12 @@ void* JemallocNodumpAllocator::alloc(
 
 #endif // FOLLY_JEMALLOC_NODUMP_ALLOCATOR_SUPPORTED
 
-void JemallocNodumpAllocator::deallocate(void* p) {
+void JemallocNodumpAllocator::deallocate(void* p, size_t) {
   dallocx != nullptr ? dallocx(p, flags_) : free(p);
 }
 
 void JemallocNodumpAllocator::deallocate(void* p, void* userData) {
-  const uint64_t flags = reinterpret_cast<uint64_t>(userData);
+  const auto flags = reinterpret_cast<uint64_t>(userData);
   dallocx != nullptr ? dallocx(p, static_cast<int>(flags)) : free(p);
 }
 
@@ -165,4 +166,4 @@ JemallocNodumpAllocator& globalJemallocNodumpAllocator() {
   return *instance;
 }
 
-} // folly
+} // namespace folly

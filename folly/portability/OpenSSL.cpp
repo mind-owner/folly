@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,7 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/portability/OpenSSL.h>
+#include <folly/ssl/detail/OpenSSLThreading.h>
 
 #include <stdexcept>
 
@@ -21,7 +23,7 @@ namespace folly {
 namespace portability {
 namespace ssl {
 
-#if OPENSSL_IS_BORINGSSL
+#ifdef OPENSSL_IS_BORINGSSL
 int SSL_CTX_set1_sigalgs_list(SSL_CTX*, const char*) {
   return 1; // 0 implies error
 }
@@ -63,15 +65,22 @@ int X509_up_ref(X509* x) {
   return CRYPTO_add(&x->references, 1, CRYPTO_LOCK_X509);
 }
 
+void X509_STORE_CTX_set0_verified_chain(
+    X509_STORE_CTX* ctx, STACK_OF(X509) * sk) {
+  sk_X509_pop_free(ctx->chain, X509_free);
+  ctx->chain = sk;
+}
+
+int X509_STORE_up_ref(X509_STORE* v) {
+  return CRYPTO_add(&v->references, 1, CRYPTO_LOCK_X509_STORE);
+}
+
 int EVP_PKEY_up_ref(EVP_PKEY* evp) {
   return CRYPTO_add(&evp->references, 1, CRYPTO_LOCK_EVP_PKEY);
 }
 
 void RSA_get0_key(
-    const RSA* r,
-    const BIGNUM** n,
-    const BIGNUM** e,
-    const BIGNUM** d) {
+    const RSA* r, const BIGNUM** n, const BIGNUM** e, const BIGNUM** d) {
   if (n != nullptr) {
     *n = r->n;
   }
@@ -90,6 +99,20 @@ RSA* EVP_PKEY_get0_RSA(EVP_PKEY* pkey) {
   return pkey->pkey.rsa;
 }
 
+DSA* EVP_PKEY_get0_DSA(EVP_PKEY* pkey) {
+  if (pkey->type != EVP_PKEY_DSA) {
+    return nullptr;
+  }
+  return pkey->pkey.dsa;
+}
+
+DH* EVP_PKEY_get0_DH(EVP_PKEY* pkey) {
+  if (pkey->type != EVP_PKEY_DH) {
+    return nullptr;
+  }
+  return pkey->pkey.dh;
+}
+
 EC_KEY* EVP_PKEY_get0_EC_KEY(EVP_PKEY* pkey) {
   if (pkey->type != EVP_PKEY_EC) {
     return nullptr;
@@ -99,6 +122,17 @@ EC_KEY* EVP_PKEY_get0_EC_KEY(EVP_PKEY* pkey) {
 #endif
 
 #if !FOLLY_OPENSSL_IS_110
+BIO_METHOD* BIO_meth_new(int type, const char* name) {
+  BIO_METHOD* method = (BIO_METHOD*)OPENSSL_malloc(sizeof(BIO_METHOD));
+  if (method == nullptr) {
+    return nullptr;
+  }
+  memset(method, 0, sizeof(BIO_METHOD));
+  method->type = type;
+  method->name = name;
+  return method;
+}
+
 void BIO_meth_free(BIO_METHOD* biom) {
   OPENSSL_free((void*)biom);
 }
@@ -111,6 +145,55 @@ int BIO_meth_set_read(BIO_METHOD* biom, int (*read)(BIO*, char*, int)) {
 int BIO_meth_set_write(BIO_METHOD* biom, int (*write)(BIO*, const char*, int)) {
   biom->bwrite = write;
   return 1;
+}
+
+int BIO_meth_set_puts(BIO_METHOD* biom, int (*bputs)(BIO*, const char*)) {
+  biom->bputs = bputs;
+  return 1;
+}
+
+int BIO_meth_set_gets(BIO_METHOD* biom, int (*bgets)(BIO*, char*, int)) {
+  biom->bgets = bgets;
+  return 1;
+}
+
+int BIO_meth_set_ctrl(BIO_METHOD* biom, long (*ctrl)(BIO*, int, long, void*)) {
+  biom->ctrl = ctrl;
+  return 1;
+}
+
+int BIO_meth_set_create(BIO_METHOD* biom, int (*create)(BIO*)) {
+  biom->create = create;
+  return 1;
+}
+
+int BIO_meth_set_destroy(BIO_METHOD* biom, int (*destroy)(BIO*)) {
+  biom->destroy = destroy;
+  return 1;
+}
+
+void BIO_set_data(BIO* bio, void* ptr) {
+  bio->ptr = ptr;
+}
+
+void* BIO_get_data(BIO* bio) {
+  return bio->ptr;
+}
+
+void BIO_set_init(BIO* bio, int init) {
+  bio->init = init;
+}
+
+void BIO_set_shutdown(BIO* bio, int shutdown) {
+  bio->shutdown = shutdown;
+}
+
+const SSL_METHOD* TLS_server_method(void) {
+  return TLSv1_2_server_method();
+}
+
+const SSL_METHOD* TLS_client_method(void) {
+  return TLSv1_2_client_method();
 }
 
 const char* SSL_SESSION_get0_hostname(const SSL_SESSION* s) {
@@ -163,6 +246,73 @@ int DH_set0_pqg(DH* dh, BIGNUM* p, BIGNUM* q, BIGNUM* g) {
   return 1;
 }
 
+void DH_get0_pqg(
+    const DH* dh, const BIGNUM** p, const BIGNUM** q, const BIGNUM** g) {
+  // Based off of https://wiki.openssl.org/index.php/OpenSSL_1.1.0_Changes
+  if (p != nullptr) {
+    *p = dh->p;
+  }
+  if (q != nullptr) {
+    *q = dh->q;
+  }
+  if (g != nullptr) {
+    *g = dh->g;
+  }
+}
+
+void DH_get0_key(
+    const DH* dh, const BIGNUM** pub_key, const BIGNUM** priv_key) {
+  // Based off of https://wiki.openssl.org/index.php/OpenSSL_1.1.0_Changes
+  if (pub_key != nullptr) {
+    *pub_key = dh->pub_key;
+  }
+  if (priv_key != nullptr) {
+    *priv_key = dh->priv_key;
+  }
+}
+
+long DH_get_length(const DH* dh) {
+  return dh->length;
+}
+
+int DH_set_length(DH* dh, long length) {
+  if (dh != nullptr) {
+    dh->length = length;
+    return 1;
+  } else {
+    return 0;
+  }
+}
+
+void DSA_get0_pqg(
+    const DSA* dsa, const BIGNUM** p, const BIGNUM** q, const BIGNUM** g) {
+  // Based off of https://wiki.openssl.org/index.php/OpenSSL_1.1.0_Changes
+  if (p != nullptr) {
+    *p = dsa->p;
+  }
+  if (q != nullptr) {
+    *q = dsa->q;
+  }
+  if (g != nullptr) {
+    *g = dsa->g;
+  }
+}
+
+void DSA_get0_key(
+    const DSA* dsa, const BIGNUM** pub_key, const BIGNUM** priv_key) {
+  // Based off of https://wiki.openssl.org/index.php/OpenSSL_1.1.0_Changes
+  if (pub_key != nullptr) {
+    *pub_key = dsa->pub_key;
+  }
+  if (priv_key != nullptr) {
+    *priv_key = dsa->priv_key;
+  }
+}
+
+STACK_OF(X509_OBJECT) * X509_STORE_get0_objects(X509_STORE* store) {
+  return store->objs;
+}
+
 X509* X509_STORE_CTX_get0_cert(X509_STORE_CTX* ctx) {
   return ctx->cert;
 }
@@ -210,9 +360,9 @@ void HMAC_CTX_free(HMAC_CTX* ctx) {
 bool RSA_set0_key(RSA* r, BIGNUM* n, BIGNUM* e, BIGNUM* d) {
   // Based off of https://wiki.openssl.org/index.php/OpenSSL_1.1.0_Changes
   /**
-   * If the fields n and e in r are NULL, the corresponding input parameters
-   * MUST be non-NULL for n and e. d may be left NULL (in case only the public
-   * key is used).
+   * If the fields n and e in r are nullptr, the corresponding input parameters
+   * MUST be non-nullptr for n and e. d may be left NULL (in case only the
+   * public key is used).
    */
   if ((r->n == nullptr && n == nullptr) || (r->e == nullptr && e == nullptr)) {
     return false;
@@ -232,7 +382,140 @@ bool RSA_set0_key(RSA* r, BIGNUM* n, BIGNUM* e, BIGNUM* d) {
   return true;
 }
 
-#endif
+void RSA_get0_factors(const RSA* r, const BIGNUM** p, const BIGNUM** q) {
+  // Based off of https://wiki.openssl.org/index.php/OpenSSL_1.1.0_Changes
+  if (p != nullptr) {
+    *p = r->p;
+  }
+  if (q != nullptr) {
+    *q = r->q;
+  }
 }
+
+void RSA_get0_crt_params(
+    const RSA* r,
+    const BIGNUM** dmp1,
+    const BIGNUM** dmq1,
+    const BIGNUM** iqmp) {
+  // Based off of https://wiki.openssl.org/index.php/OpenSSL_1.1.0_Changes
+  if (dmp1 != nullptr) {
+    *dmp1 = r->dmp1;
+  }
+  if (dmq1 != nullptr) {
+    *dmq1 = r->dmq1;
+  }
+  if (iqmp != nullptr) {
+    *iqmp = r->iqmp;
+  }
 }
+
+int ECDSA_SIG_set0(ECDSA_SIG* sig, BIGNUM* r, BIGNUM* s) {
+  // Based off of https://wiki.openssl.org/index.php/OpenSSL_1.1.0_Changes
+  if (r == nullptr || s == nullptr) {
+    return 0;
+  }
+  BN_clear_free(sig->r);
+  BN_clear_free(sig->s);
+  sig->r = r;
+  sig->s = s;
+  return 1;
 }
+
+void ECDSA_SIG_get0(
+    const ECDSA_SIG* sig, const BIGNUM** pr, const BIGNUM** ps) {
+  // Based off of https://wiki.openssl.org/index.php/OpenSSL_1.1.0_Changes
+  if (pr != nullptr) {
+    *pr = sig->r;
+  }
+  if (ps != nullptr) {
+    *ps = sig->s;
+  }
+}
+
+/**
+ * Compatibility shim for OpenSSL < 1.1.0.
+ *
+ * For now, options and settings are ignored. We implement the most common
+ * behavior, which is to add all digests, ciphers, and strings.
+ */
+int OPENSSL_init_ssl(uint64_t, const OPENSSL_INIT_SETTINGS*) {
+  // OpenSSL >= 1.1.0 handles initializing the library, adding digests &
+  // ciphers, loading strings. Additionally, OpenSSL >= 1.1.0 uses platform
+  // native threading & mutexes, which means that we should handle setting up
+  // the necessary threading initialization in the compat layer as well.
+  SSL_library_init();
+  OpenSSL_add_all_ciphers();
+  OpenSSL_add_all_digests();
+  OpenSSL_add_all_algorithms();
+
+  SSL_load_error_strings();
+  ERR_load_crypto_strings();
+
+  // The caller should have used SSLContext::setLockTypes() prior to calling
+  // this function.
+  folly::ssl::detail::installThreadingLocks();
+  return 1;
+}
+
+void OPENSSL_cleanup() {
+  folly::ssl::detail::cleanupThreadingLocks();
+  CRYPTO_cleanup_all_ex_data();
+  ERR_free_strings();
+  EVP_cleanup();
+  ERR_clear_error();
+}
+
+const ASN1_INTEGER* X509_REVOKED_get0_serialNumber(const X509_REVOKED* r) {
+  return r->serialNumber;
+}
+
+const ASN1_TIME* X509_REVOKED_get0_revocationDate(const X509_REVOKED* r) {
+  return r->revocationDate;
+}
+
+uint32_t X509_get_extension_flags(X509* x) {
+  // Tells OpenSSL to load flags
+  X509_check_purpose(x, -1, -1);
+  return x->ex_flags;
+}
+
+uint32_t X509_get_key_usage(X509* x) {
+  // Call get_extension_flags rather than accessing directly to force loading
+  // of flags
+  if ((X509_get_extension_flags(x) & EXFLAG_KUSAGE) == EXFLAG_KUSAGE) {
+    return x->ex_kusage;
+  }
+  return UINT32_MAX;
+}
+
+uint32_t X509_get_extended_key_usage(X509* x) {
+  return x->ex_xkusage;
+}
+
+int X509_OBJECT_get_type(const X509_OBJECT* obj) {
+  return obj->type;
+}
+
+X509* X509_OBJECT_get0_X509(const X509_OBJECT* obj) {
+  if (obj == nullptr || obj->type != X509_LU_X509) {
+    return nullptr;
+  }
+  return obj->data.x509;
+}
+
+const ASN1_TIME* X509_CRL_get0_lastUpdate(const X509_CRL* crl) {
+  return X509_CRL_get_lastUpdate(crl);
+}
+
+const ASN1_TIME* X509_CRL_get0_nextUpdate(const X509_CRL* crl) {
+  return X509_CRL_get_nextUpdate(crl);
+}
+
+const X509_ALGOR* X509_get0_tbs_sigalg(const X509* x) {
+  return x->cert_info->signature;
+}
+
+#endif // !FOLLY_OPENSSL_IS_110
+} // namespace ssl
+} // namespace portability
+} // namespace folly

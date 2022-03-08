@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,7 +22,8 @@
 
 #include <folly/experimental/symbolizer/StackTrace.h>
 
-namespace folly { namespace exception_tracer {
+namespace folly {
+namespace exception_tracer {
 
 class StackTraceStack::Node : public StackTrace {
  public:
@@ -32,8 +33,8 @@ class StackTraceStack::Node : public StackTrace {
   Node* next;
 
  private:
-  Node() : next(nullptr) { }
-  ~Node() { }
+  Node() : next(nullptr) {}
+  ~Node() = default;
 };
 
 auto StackTraceStack::Node::allocate() -> Node* {
@@ -46,7 +47,6 @@ void StackTraceStack::Node::deallocate() {
 }
 
 bool StackTraceStack::pushCurrent() {
-  checkGuard();
   auto node = Node::allocate();
   if (!node) {
     // cannot allocate memory
@@ -60,52 +60,56 @@ bool StackTraceStack::pushCurrent() {
   }
   node->frameCount = n;
 
-  node->next = top_;
-  top_ = node;
+  node->next = state_;
+  state_ = node;
   return true;
 }
 
 bool StackTraceStack::pop() {
-  checkGuard();
-  if (!top_) {
+  if (!state_) {
     return false;
   }
 
-  auto node = top_;
-  top_ = node->next;
+  auto node = state_;
+  state_ = node->next;
   node->deallocate();
   return true;
 }
 
 bool StackTraceStack::moveTopFrom(StackTraceStack& other) {
-  checkGuard();
-  if (!other.top_) {
+  if (!other.state_) {
     return false;
   }
 
-  auto node = other.top_;
-  other.top_ = node->next;
-  node->next = top_;
-  top_ = node;
+  auto node = other.state_;
+  other.state_ = node->next;
+  node->next = state_;
+  state_ = node;
   return true;
 }
 
 void StackTraceStack::clear() {
-  checkGuard();
-  while (top_) {
+  while (state_) {
     pop();
   }
 }
 
 StackTrace* StackTraceStack::top() {
-  checkGuard();
-  return top_;
+  return state_;
+}
+
+const StackTrace* StackTraceStack::top() const {
+  return state_;
 }
 
 StackTrace* StackTraceStack::next(StackTrace* p) {
-  checkGuard();
   assert(p);
   return static_cast<Node*>(p)->next;
 }
 
-}}  // namespaces
+const StackTrace* StackTraceStack::next(const StackTrace* p) const {
+  assert(p);
+  return static_cast<const Node*>(p)->next;
+}
+} // namespace exception_tracer
+} // namespace folly

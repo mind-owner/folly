@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,23 +14,20 @@
  * limitations under the License.
  */
 
-#include <folly/stats/BucketedTimeSeries-defs.h>
-#include <folly/stats/BucketedTimeSeries.h>
-#include <folly/stats/MultiLevelTimeSeries-defs.h>
-#include <folly/stats/MultiLevelTimeSeries.h>
-#include <folly/stats/detail/Bucket.h>
-
 #include <array>
 
 #include <glog/logging.h>
 
-#include <folly/Foreach.h>
+#include <folly/container/Foreach.h>
 #include <folly/portability/GTest.h>
+#include <folly/stats/BucketedTimeSeries.h>
+#include <folly/stats/MultiLevelTimeSeries.h>
+#include <folly/stats/detail/Bucket.h>
 
-using std::chrono::seconds;
+using folly::BucketedTimeSeries;
 using std::string;
 using std::vector;
-using folly::BucketedTimeSeries;
+using std::chrono::seconds;
 
 using Bucket = folly::detail::Bucket<int64_t>;
 using StatsClock = folly::LegacyStatsClock<std::chrono::seconds>;
@@ -49,7 +46,7 @@ std::ostream& operator<<(std::ostream& os, TimePoint tp) {
   os << tp.time_since_epoch().count();
   return os;
 }
-}
+} // namespace std
 
 namespace {
 TimePoint mkTimePoint(int value) {
@@ -80,7 +77,7 @@ vector<TestData> testData = {
     // 1 second x 1 buckets
     {1, 1, {0}},
 };
-}
+} // namespace
 
 TEST(BucketedTimeSeries, getBucketInfo) {
   for (const auto& data : testData) {
@@ -496,12 +493,12 @@ TEST(BucketedTimeSeries, avgTypeConversion) {
 }
 
 TEST(BucketedTimeSeries, forEachBucket) {
-  typedef BucketedTimeSeries<int64_t>::Bucket Bucket;
+  typedef BucketedTimeSeries<int64_t>::Bucket BucketSeries;
   struct BucketInfo {
-    BucketInfo(const Bucket* b, TimePoint s, TimePoint ns)
+    BucketInfo(const BucketSeries* b, TimePoint s, TimePoint ns)
         : bucket(b), start(s), nextStart(ns) {}
 
-    const Bucket* bucket;
+    const BucketSeries* bucket;
     TimePoint start;
     TimePoint nextStart;
   };
@@ -510,7 +507,7 @@ TEST(BucketedTimeSeries, forEachBucket) {
     BucketedTimeSeries<int64_t> ts(data.numBuckets, seconds(data.duration));
 
     vector<BucketInfo> info;
-    auto fn = [&](const Bucket& bucket,
+    auto fn = [&](const BucketSeries& bucket,
                   TimePoint bucketStart,
                   TimePoint bucketEnd) -> bool {
       info.emplace_back(&bucket, bucketStart, bucketEnd);
@@ -898,7 +895,7 @@ enum Levels {
 };
 
 const seconds kMinuteHourDurations[] = {seconds(60), seconds(3600), seconds(0)};
-};
+} // namespace IntMHTS
 
 TEST(MinuteHourTimeSeries, Basic) {
   folly::MultiLevelTimeSeries<int> mhts(
@@ -1071,7 +1068,18 @@ TEST(MinuteHourTimeSeries, QueryByInterval) {
   };
 
   int expectedCounts[12] = {
-      60, 3600, 7200, 3540, 7140, 3600, 30, 3000, 7180, 2000, 6200, 3600,
+      60,
+      3600,
+      7200,
+      3540,
+      7140,
+      3600,
+      30,
+      3000,
+      7180,
+      2000,
+      6200,
+      3600,
   };
 
   for (int i = 0; i < 12; ++i) {
@@ -1248,18 +1256,19 @@ TEST(MultiLevelTimeSeries, QueryByInterval) {
       {curTime - seconds(7200), curTime - seconds(3600)},
   }};
 
-  std::array<int, 12> expectedSums = {{6000,
-                                       41400,
-                                       32400,
-                                       35400,
-                                       32130,
-                                       16200,
-                                       3000,
-                                       33600,
-                                       32310,
-                                       20000,
-                                       27900,
-                                       16200}};
+  std::array<int, 12> expectedSums = {
+      {6000,
+       41400,
+       32400,
+       35400,
+       32130,
+       16200,
+       3000,
+       33600,
+       32310,
+       20000,
+       27900,
+       16200}};
 
   std::array<int, 12> expectedCounts = {
       {60, 3600, 7200, 3540, 7140, 3600, 30, 3000, 7180, 2000, 6200, 3600}};

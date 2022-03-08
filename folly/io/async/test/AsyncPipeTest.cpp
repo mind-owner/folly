@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,11 +15,12 @@
  */
 
 #include <folly/io/async/AsyncPipe.h>
-#include <folly/io/async/EventBase.h>
-#include <folly/Memory.h>
-#include <folly/portability/GTest.h>
 
 #include <fcntl.h>
+
+#include <folly/Memory.h>
+#include <folly/io/async/EventBase.h>
+#include <folly/portability/GTest.h>
 
 using namespace testing;
 
@@ -27,12 +28,8 @@ namespace {
 
 class TestReadCallback : public folly::AsyncReader::ReadCallback {
  public:
-  bool isBufferMovable() noexcept override {
-    return movable_;
-  }
-  void setMovable(bool movable) {
-    movable_ = movable;
-  }
+  bool isBufferMovable() noexcept override { return movable_; }
+  void setMovable(bool movable) { movable_ = movable; }
 
   void readBufferAvailable(
       std::unique_ptr<folly::IOBuf> readBuf) noexcept override {
@@ -58,13 +55,13 @@ class TestReadCallback : public folly::AsyncReader::ReadCallback {
   std::string getData() {
     auto buf = readBuffer_.move();
     buf->coalesce();
-    return std::string((char *)buf->data(), buf->length());
+    return std::string((char*)buf->data(), buf->length());
   }
 
   void reset() {
     movable_ = false;
     error_ = false;
-    readBuffer_.clear();
+    readBuffer_.reset();
   }
 
   folly::IOBufQueue readBuffer_{folly::IOBufQueue::cacheChainLength()};
@@ -89,7 +86,7 @@ class TestWriteCallback : public folly::AsyncWriter::WriteCallback {
   bool error_{false};
 };
 
-class AsyncPipeTest: public Test {
+class AsyncPipeTest : public Test {
  public:
   void reset(bool movable) {
     reader_.reset();
@@ -103,9 +100,9 @@ class AsyncPipeTest: public Test {
     EXPECT_EQ(::fcntl(pipeFds_[0], F_SETFL, O_NONBLOCK), 0);
     EXPECT_EQ(::fcntl(pipeFds_[1], F_SETFL, O_NONBLOCK), 0);
     reader_ = folly::AsyncPipeReader::newReader(
-      &eventBase_, pipeFds_[0]);
+        &eventBase_, folly::NetworkSocket::fromFd(pipeFds_[0]));
     writer_ = folly::AsyncPipeWriter::newWriter(
-      &eventBase_, pipeFds_[1]);
+        &eventBase_, folly::NetworkSocket::fromFd(pipeFds_[1]));
 
     readCallback_.setMovable(movable);
   }
@@ -124,8 +121,7 @@ std::unique_ptr<folly::IOBuf> getBuf(const std::string& data) {
   return buf;
 }
 
-} // anonymous namespace
-
+} // namespace
 
 TEST_F(AsyncPipeTest, simple) {
   for (int pass = 0; pass < 2; ++pass) {

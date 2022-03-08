@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,7 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/Conv.h>
+
 #include <array>
 
 namespace folly {
@@ -50,28 +52,34 @@ struct MaxString {
   static const char* const value;
 };
 
-template <> const char *const MaxString<uint8_t>::value = "255";
-template <> const char *const MaxString<uint16_t>::value = "65535";
-template <> const char *const MaxString<uint32_t>::value = "4294967295";
+template <>
+const char* const MaxString<uint8_t>::value = "255";
+template <>
+const char* const MaxString<uint16_t>::value = "65535";
+template <>
+const char* const MaxString<uint32_t>::value = "4294967295";
 #if __SIZEOF_LONG__ == 4
-template <> const char *const MaxString<unsigned long>::value =
-  "4294967295";
+template <>
+const char* const MaxString<unsigned long>::value = "4294967295";
 #else
-template <> const char *const MaxString<unsigned long>::value =
-  "18446744073709551615";
+template <>
+const char* const MaxString<unsigned long>::value = "18446744073709551615";
 #endif
-static_assert(sizeof(unsigned long) >= 4,
-              "Wrong value for MaxString<unsigned long>::value,"
-              " please update.");
-template <> const char *const MaxString<unsigned long long>::value =
-  "18446744073709551615";
-static_assert(sizeof(unsigned long long) >= 8,
-              "Wrong value for MaxString<unsigned long long>::value"
-              ", please update.");
+static_assert(
+    sizeof(unsigned long) >= 4,
+    "Wrong value for MaxString<unsigned long>::value,"
+    " please update.");
+template <>
+const char* const MaxString<unsigned long long>::value = "18446744073709551615";
+static_assert(
+    sizeof(unsigned long long) >= 8,
+    "Wrong value for MaxString<unsigned long long>::value"
+    ", please update.");
 
 #if FOLLY_HAVE_INT128_T
-template <> const char *const MaxString<__uint128_t>::value =
-  "340282366920938463463374607431768211455";
+template <>
+const char* const MaxString<__uint128_t>::value =
+    "340282366920938463463374607431768211455";
 #endif
 
 /*
@@ -86,120 +94,120 @@ template <> const char *const MaxString<__uint128_t>::value =
 // still not overflow uint16_t.
 constexpr int32_t OOR = 10000;
 
-FOLLY_ALIGNED(16) constexpr uint16_t shift1[] = {
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 0-9
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  10
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  20
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  30
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, 0,         //  40
-  1, 2, 3, 4, 5, 6, 7, 8, 9, OOR, OOR,
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  60
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  70
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  80
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  90
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 100
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 110
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 120
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 130
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 140
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 150
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 160
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 170
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 180
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 190
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 200
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 210
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 220
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 230
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 240
-  OOR, OOR, OOR, OOR, OOR, OOR                       // 250
+alignas(16) constexpr uint16_t shift1[] = {
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 0-9
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  10
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  20
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  30
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, 0,   1, //  40
+    2,   3,   4,   5,   6,   7,   8,   9,   OOR, OOR,
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  60
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  70
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  80
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  90
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 100
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 110
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 120
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 130
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 140
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 150
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 160
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 170
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 180
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 190
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 200
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 210
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 220
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 230
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 240
+    OOR, OOR, OOR, OOR, OOR, OOR // 250
 };
 
-FOLLY_ALIGNED(16) constexpr uint16_t shift10[] = {
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 0-9
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  10
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  20
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  30
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, 0,         //  40
-  10, 20, 30, 40, 50, 60, 70, 80, 90, OOR, OOR,
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  60
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  70
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  80
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  90
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 100
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 110
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 120
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 130
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 140
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 150
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 160
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 170
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 180
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 190
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 200
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 210
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 220
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 230
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 240
-  OOR, OOR, OOR, OOR, OOR, OOR                       // 250
+alignas(16) constexpr uint16_t shift10[] = {
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 0-9
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  10
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  20
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  30
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, 0,   10, //  40
+    20,  30,  40,  50,  60,  70,  80,  90,  OOR, OOR,
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  60
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  70
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  80
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  90
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 100
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 110
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 120
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 130
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 140
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 150
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 160
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 170
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 180
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 190
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 200
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 210
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 220
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 230
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 240
+    OOR, OOR, OOR, OOR, OOR, OOR // 250
 };
 
-FOLLY_ALIGNED(16) constexpr uint16_t shift100[] = {
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 0-9
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  10
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  20
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  30
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, 0,         //  40
-  100, 200, 300, 400, 500, 600, 700, 800, 900, OOR, OOR,
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  60
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  70
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  80
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  90
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 100
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 110
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 120
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 130
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 140
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 150
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 160
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 170
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 180
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 190
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 200
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 210
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 220
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 230
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 240
-  OOR, OOR, OOR, OOR, OOR, OOR                       // 250
+alignas(16) constexpr uint16_t shift100[] = {
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 0-9
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  10
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  20
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  30
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, 0,   100, //  40
+    200, 300, 400, 500, 600, 700, 800, 900, OOR, OOR,
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  60
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  70
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  80
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, //  90
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 100
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 110
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 120
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 130
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 140
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 150
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 160
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 170
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 180
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 190
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 200
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 210
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 220
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 230
+    OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, // 240
+    OOR, OOR, OOR, OOR, OOR, OOR // 250
 };
 
-FOLLY_ALIGNED(16) constexpr uint16_t shift1000[] = {
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 0-9
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  10
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  20
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  30
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, 0,         //  40
-  1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, OOR, OOR,
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  60
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  70
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  80
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  //  90
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 100
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 110
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 120
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 130
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 140
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 150
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 160
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 170
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 180
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 190
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 200
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 210
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 220
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 230
-  OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR, OOR,  // 240
-  OOR, OOR, OOR, OOR, OOR, OOR                       // 250
+alignas(16) constexpr uint16_t shift1000[] = {
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 0-9
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, //  10
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, //  20
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, //  30
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  0,   1000, //  40
+    2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, OOR, OOR,
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, //  60
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, //  70
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, //  80
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, //  90
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 100
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 110
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 120
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 130
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 140
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 150
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 160
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 170
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 180
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 190
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 200
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 210
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 220
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 230
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR,  OOR, OOR, // 240
+    OOR,  OOR,  OOR,  OOR,  OOR,  OOR // 250
 };
 
 struct ErrorString {
@@ -229,8 +237,8 @@ constexpr const std::array<
     }};
 
 // Check if ASCII is really ASCII
-using IsAscii = std::
-    integral_constant<bool, 'A' == 65 && 'Z' == 90 && 'a' == 97 && 'z' == 122>;
+using IsAscii =
+    bool_constant<'A' == 65 && 'Z' == 90 && 'a' == 97 && 'z' == 122>;
 
 // The code in this file that uses tolower() really only cares about
 // 7-bit ASCII characters, so we can take a nice shortcut here.
@@ -255,7 +263,7 @@ inline bool bool_str_cmp(const char** b, size_t len, const char* value) {
   return true;
 }
 
-} // anonymous namespace
+} // namespace
 
 Expected<bool, ConversionCode> str_to_bool(StringPiece* src) noexcept {
   auto b = src->begin(), e = src->end();
@@ -269,7 +277,7 @@ Expected<bool, ConversionCode> str_to_bool(StringPiece* src) noexcept {
   }
 
   bool result;
-  size_t len = size_t(e - b);
+  auto len = size_t(e - b);
   switch (*b) {
     case '0':
     case '1': {
@@ -286,7 +294,7 @@ Expected<bool, ConversionCode> str_to_bool(StringPiece* src) noexcept {
     case 'Y':
       result = true;
       if (!bool_str_cmp(&b, len, "yes")) {
-        ++b;  // accept the single 'y' character
+        ++b; // accept the single 'y' character
       }
       break;
     case 'n':
@@ -336,22 +344,24 @@ Expected<bool, ConversionCode> str_to_bool(StringPiece* src) noexcept {
 template <class Tgt>
 Expected<Tgt, ConversionCode> str_to_floating(StringPiece* src) noexcept {
   using namespace double_conversion;
-  static StringToDoubleConverter
-    conv(StringToDoubleConverter::ALLOW_TRAILING_JUNK
-         | StringToDoubleConverter::ALLOW_LEADING_SPACES,
-         0.0,
-         // return this for junk input string
-         std::numeric_limits<double>::quiet_NaN(),
-         nullptr, nullptr);
+  static StringToDoubleConverter conv(
+      StringToDoubleConverter::ALLOW_TRAILING_JUNK |
+          StringToDoubleConverter::ALLOW_LEADING_SPACES,
+      0.0,
+      // return this for junk input string
+      std::numeric_limits<Tgt>::quiet_NaN(),
+      nullptr,
+      nullptr);
 
   if (src->empty()) {
     return makeUnexpected(ConversionCode::EMPTY_INPUT_STRING);
   }
 
-  int length;
-  auto result = conv.StringToDouble(src->data(),
-                                    static_cast<int>(src->size()),
-                                    &length); // processed char count
+  int length; // processed char count
+  auto result = std::is_same<Tgt, float>::value
+      ? conv.StringToFloat(src->data(), static_cast<int>(src->size()), &length)
+      : static_cast<Tgt>(conv.StringToDouble(
+            src->data(), static_cast<int>(src->size()), &length));
 
   if (!std::isnan(result)) {
     // If we get here with length = 0, the input string is empty.
@@ -365,6 +375,22 @@ Expected<Tgt, ConversionCode> str_to_floating(StringPiece* src) noexcept {
         (result == 0.0 && std::isspace((*src)[size_t(length) - 1]))) {
       return makeUnexpected(ConversionCode::EMPTY_INPUT_STRING);
     }
+    if (length >= 2) {
+      const char* suffix = src->data() + length - 1;
+      // double_conversion doesn't update length correctly when there is an
+      // incomplete exponent specifier. Converting "12e-f-g" shouldn't consume
+      // any more than "12", but it will consume "12e-".
+
+      // "123-" should only parse "123"
+      if (*suffix == '-' || *suffix == '+') {
+        --suffix;
+        --length;
+      }
+      // "12e-f-g" or "12euro" should only parse "12"
+      if (*suffix == 'e' || *suffix == 'E') {
+        --length;
+      }
+    }
     src->advance(size_t(length));
     return Tgt(result);
   }
@@ -372,17 +398,21 @@ Expected<Tgt, ConversionCode> str_to_floating(StringPiece* src) noexcept {
   auto* e = src->end();
   auto* b =
       std::find_if_not(src->begin(), e, [](char c) { return std::isspace(c); });
-
-  // There must be non-whitespace, otherwise we would have caught this above
-  assert(b < e);
-  size_t size = size_t(e - b);
+  if (b == e) {
+    return makeUnexpected(ConversionCode::EMPTY_INPUT_STRING);
+  }
+  auto size = size_t(e - b);
 
   bool negative = false;
   if (*b == '-') {
     negative = true;
     ++b;
     --size;
+    if (size == 0) {
+      return makeUnexpected(ConversionCode::STRING_TO_FLOAT_ERROR);
+    }
   }
+  assert(size > 0);
 
   result = 0.0;
 
@@ -436,7 +466,7 @@ template Expected<double, ConversionCode> str_to_floating<double>(
  * This class takes care of additional processing needed for signed values,
  * like leading sign character and overflow checks.
  */
-template <typename T, bool IsSigned = std::is_signed<T>::value>
+template <typename T, bool IsSigned = is_signed_v<T>>
 class SignedValueHandler;
 
 template <typename T>
@@ -464,7 +494,14 @@ class SignedValueHandler<T, true> {
   Expected<T, ConversionCode> finalize(U value) {
     T rv;
     if (negative_) {
+      FOLLY_PUSH_WARNING
+      FOLLY_MSVC_DISABLE_WARNING(4146)
+
+      // unary minus operator applied to unsigned type, result still unsigned
       rv = T(-value);
+
+      FOLLY_POP_WARNING
+
       if (UNLIKELY(rv > 0)) {
         return makeUnexpected(ConversionCode::NEGATIVE_OVERFLOW);
       }
@@ -485,17 +522,11 @@ class SignedValueHandler<T, true> {
 template <typename T>
 class SignedValueHandler<T, false> {
  public:
-  ConversionCode init(const char*&) {
-    return ConversionCode::SUCCESS;
-  }
+  ConversionCode init(const char*&) { return ConversionCode::SUCCESS; }
 
-  ConversionCode overflow() {
-    return ConversionCode::POSITIVE_OVERFLOW;
-  }
+  ConversionCode overflow() { return ConversionCode::POSITIVE_OVERFLOW; }
 
-  Expected<T, ConversionCode> finalize(T value) {
-    return value;
-  }
+  Expected<T, ConversionCode> finalize(T value) { return value; }
 };
 
 /**
@@ -507,9 +538,8 @@ class SignedValueHandler<T, false> {
  */
 template <class Tgt>
 inline Expected<Tgt, ConversionCode> digits_to(
-    const char* b,
-    const char* const e) noexcept {
-  using UT = typename std::make_unsigned<Tgt>::type;
+    const char* b, const char* const e) noexcept {
+  using UT = make_unsigned_t<Tgt>;
   assert(b <= e);
 
   SignedValueHandler<Tgt> sgn;
@@ -519,7 +549,7 @@ inline Expected<Tgt, ConversionCode> digits_to(
     return makeUnexpected(err);
   }
 
-  size_t size = size_t(e - b);
+  auto size = size_t(e - b);
 
   /* Although the string is entirely made of digits, we still need to
    * check for overflow.
@@ -550,7 +580,7 @@ inline Expected<Tgt, ConversionCode> digits_to(
   UT result = 0;
 
   for (; e - b >= 4; b += 4) {
-    result *= static_cast<UT>(10000);
+    result *= UT(10000);
     const int32_t r0 = shift1000[static_cast<size_t>(b[0])];
     const int32_t r1 = shift100[static_cast<size_t>(b[1])];
     const int32_t r2 = shift10[static_cast<size_t>(b[2])];
@@ -563,41 +593,41 @@ inline Expected<Tgt, ConversionCode> digits_to(
   }
 
   switch (e - b) {
-  case 3: {
-    const int32_t r0 = shift100[static_cast<size_t>(b[0])];
-    const int32_t r1 = shift10[static_cast<size_t>(b[1])];
-    const int32_t r2 = shift1[static_cast<size_t>(b[2])];
-    const auto sum = r0 + r1 + r2;
-    if (sum >= OOR) {
-      goto outOfRange;
+    case 3: {
+      const int32_t r0 = shift100[static_cast<size_t>(b[0])];
+      const int32_t r1 = shift10[static_cast<size_t>(b[1])];
+      const int32_t r2 = shift1[static_cast<size_t>(b[2])];
+      const auto sum = r0 + r1 + r2;
+      if (sum >= OOR) {
+        goto outOfRange;
+      }
+      result = UT(1000 * result + sum);
+      break;
     }
-    result = UT(1000 * result + sum);
-    break;
-  }
-  case 2: {
-    const int32_t r0 = shift10[static_cast<size_t>(b[0])];
-    const int32_t r1 = shift1[static_cast<size_t>(b[1])];
-    const auto sum = r0 + r1;
-    if (sum >= OOR) {
-      goto outOfRange;
+    case 2: {
+      const int32_t r0 = shift10[static_cast<size_t>(b[0])];
+      const int32_t r1 = shift1[static_cast<size_t>(b[1])];
+      const auto sum = r0 + r1;
+      if (sum >= OOR) {
+        goto outOfRange;
+      }
+      result = UT(100 * result + sum);
+      break;
     }
-    result = UT(100 * result + sum);
-    break;
-  }
-  case 1: {
-    const int32_t sum = shift1[static_cast<size_t>(b[0])];
-    if (sum >= OOR) {
-      goto outOfRange;
+    case 1: {
+      const int32_t sum = shift1[static_cast<size_t>(b[0])];
+      if (sum >= OOR) {
+        goto outOfRange;
+      }
+      result = UT(10 * result + sum);
+      break;
     }
-    result = UT(10 * result + sum);
-    break;
-  }
-  default:
-    assert(b == e);
-    if (size == 0) {
-      return makeUnexpected(ConversionCode::NO_DIGITS);
-    }
-    break;
+    default:
+      assert(b == e);
+      if (size == 0) {
+        return makeUnexpected(ConversionCode::NO_DIGITS);
+      }
+      break;
   }
 
   return sgn.finalize(result);
@@ -607,46 +637,35 @@ outOfRange:
 }
 
 template Expected<char, ConversionCode> digits_to<char>(
-    const char*,
-    const char*) noexcept;
+    const char*, const char*) noexcept;
 template Expected<signed char, ConversionCode> digits_to<signed char>(
-    const char*,
-    const char*) noexcept;
+    const char*, const char*) noexcept;
 template Expected<unsigned char, ConversionCode> digits_to<unsigned char>(
-    const char*,
-    const char*) noexcept;
+    const char*, const char*) noexcept;
 
 template Expected<short, ConversionCode> digits_to<short>(
-    const char*,
-    const char*) noexcept;
+    const char*, const char*) noexcept;
 template Expected<unsigned short, ConversionCode> digits_to<unsigned short>(
-    const char*,
-    const char*) noexcept;
+    const char*, const char*) noexcept;
 
 template Expected<int, ConversionCode> digits_to<int>(
-    const char*,
-    const char*) noexcept;
+    const char*, const char*) noexcept;
 template Expected<unsigned int, ConversionCode> digits_to<unsigned int>(
-    const char*,
-    const char*) noexcept;
+    const char*, const char*) noexcept;
 
 template Expected<long, ConversionCode> digits_to<long>(
-    const char*,
-    const char*) noexcept;
+    const char*, const char*) noexcept;
 template Expected<unsigned long, ConversionCode> digits_to<unsigned long>(
-    const char*,
-    const char*) noexcept;
+    const char*, const char*) noexcept;
 
 template Expected<long long, ConversionCode> digits_to<long long>(
-    const char*,
-    const char*) noexcept;
+    const char*, const char*) noexcept;
 template Expected<unsigned long long, ConversionCode>
 digits_to<unsigned long long>(const char*, const char*) noexcept;
 
 #if FOLLY_HAVE_INT128_T
 template Expected<__int128, ConversionCode> digits_to<__int128>(
-    const char*,
-    const char*) noexcept;
+    const char*, const char*) noexcept;
 template Expected<unsigned __int128, ConversionCode>
 digits_to<unsigned __int128>(const char*, const char*) noexcept;
 #endif
@@ -657,7 +676,7 @@ digits_to<unsigned __int128>(const char*, const char*) noexcept;
  */
 template <class Tgt>
 Expected<Tgt, ConversionCode> str_to_integral(StringPiece* src) noexcept {
-  using UT = typename std::make_unsigned<Tgt>::type;
+  using UT = make_unsigned_t<Tgt>;
 
   auto b = src->data(), past = src->data() + src->size();
 
@@ -676,7 +695,7 @@ Expected<Tgt, ConversionCode> str_to_integral(StringPiece* src) noexcept {
   if (UNLIKELY(err != ConversionCode::SUCCESS)) {
     return makeUnexpected(err);
   }
-  if (std::is_signed<Tgt>::value && UNLIKELY(b >= past)) {
+  if (is_signed_v<Tgt> && UNLIKELY(b >= past)) {
     return makeUnexpected(ConversionCode::NO_DIGITS);
   }
   if (UNLIKELY(!isdigit(*b))) {
@@ -753,7 +772,7 @@ ConversionError makeConversionError(ConversionCode code, StringPiece input) {
   if (err.quote) {
     tmp.append(1, '"');
   }
-  if (input.size() > 0) {
+  if (!input.empty()) {
     tmp.append(input.data(), input.size());
   }
   if (err.quote) {

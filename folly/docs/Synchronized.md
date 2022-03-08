@@ -153,15 +153,12 @@ mutex type: `Synchronized<T, Mutex>`.
 If not specified, the mutex type defaults to `folly::SharedMutex`.  However, any
 mutex type supported by `folly::LockTraits` can be used instead.
 `folly::LockTraits` can be specialized to support other custom mutex
-types that it does not know about out of the box.  See
-`folly/LockTraitsBoost.h` for an example of how to support additional mutex
-types.
+types that it does not know about out of the box.
 
 `Synchronized` provides slightly different APIs when instantiated with a
 shared mutex type or an upgrade mutex type then with a plain exclusive mutex.
-If instantiated with either of the two mutex types above (either through
-having a member called lock_shared() or specializing `LockTraits` as in
-`folly/LockTraitsBoost.h`) the `Synchronized` object has corresponding
+If instantiated with either of the two mutex types above through having a
+member called lock_shared(), the `Synchronized` object has corresponding
 `wlock`, `rlock` or `ulock` methods to acquire different lock types.  When
 using a shared or upgrade mutex type, these APIs ensure that callers make an
 explicit choice to acquire a shared, exclusive or upgrade lock and that
@@ -198,27 +195,26 @@ takes an object of type `T` and copies it. For example:
 
 #### Assignment, swap, and copying
 
-The canonical assignment operator locks both objects involved and
-then copies the underlying data objects. The mutexes are not
-copied. The locks are acquired in increasing address order, so
-deadlock is avoided. For example, there is no problem if one
-thread assigns `a = b` and the other assigns `b = a` (other than
-that design probably deserving a Razzie award). Similarly, the
-`swap` method takes a reference to another `Synchronized<T>`
-object and swaps the data. Again, locks are acquired in a well-
-defined order. The mutexes are not swapped.
+The copy assignment operator copies the underlying source data
+into a temporary with the source mutex locked, and then move the
+temporary into the destination data with the destination mutex
+locked. This technique avoids the need to lock both mutexes at
+the same time. Mutexes are not copied or moved.
 
-An additional assignment operator accepts a `const T&` on the
-right-hand side. The operator copies the datum inside a
-critical section.
+The move assignment operator assumes the source object is a true
+rvalue and does lock the source mutex. It moves the source
+data into the destination data with the destination mutex locked.
 
-In addition to assignment operators, `Synchronized<T>` has move
-assignment operators.
+`swap` acquires locks on both mutexes in increasing order of
+object address, and then swaps the underlying data. This avoids
+potential deadlock, which may otherwise happen should one thread
+do `a = b` while another thread does `b = a`.
 
-An additional `swap` method accepts a `T&` and swaps the data
-inside a critical section. This is by far the preferred method of
-changing the guarded datum wholesale because it keeps the lock
-only for a short time, thus lowering the pressure on the mutex.
+The data copy assignment operator copies the parameter into the
+destination data while the destination mutex is locked.
+
+The data move assignment operator moves the parameter into the
+destination data while the destination mutex is locked.
 
 To get a copy of the guarded data, there are two methods
 available: `void copy(T*)` and `T copy()`. The first copies data
@@ -502,7 +498,7 @@ problem is called reader starvation.
 
 One solution is to use a shared mutex type with read priority, such as
 `folly::SharedMutexReadPriority`. That can introduce less blocking under
-contention to the other threads attemping to acquire a shared lock to do the
+contention to the other threads attempting to acquire a shared lock to do the
 first check. However, that may backfire and cause threads which are attempting
 to acquire a unique lock (for the second check) to stall, waiting for a moment
 in time when there are no shared locks held on the mutex, a moment in time that
@@ -524,7 +520,7 @@ checks rather than blocking or being blocked by them.
 The example would then look like:
 
 ``` Cpp
-    struct MyObect {
+    struct MyObject {
       bool isUpdateRequired() const;
       void doUpdate();
     };
@@ -658,7 +654,7 @@ When used with a `std::mutex`, `Synchronized` supports using a
 in the internal data.
 
 The `LockedPtr` returned by `Synchronized<T, std::mutex>::lock()` has a
-`getUniqueLock()` method that returns a reference to a
+`as_lock()` method that returns a reference to a
 `std::unique_lock<std::mutex>`, which can be given to the
 `std::condition_variable`:
 
@@ -669,7 +665,7 @@ The `LockedPtr` returned by `Synchronized<T, std::mutex>::lock()` has a
     // Assuming some other thread will put data on vec and signal
     // emptySignal, we can then wait on it as follows:
     auto locked = vec.lock();
-    emptySignal.wait(locked.getUniqueLock(),
+    emptySignal.wait(locked.as_lock(),
                      [&] { return !locked->empty(); });
 ```
 
@@ -715,7 +711,7 @@ locking of two objects and offering their innards.  It returns a
 ```
 
 Note that C++ 17 introduces
-(structured binding syntax)[(http://wg21.link/P0144r2)]
+[structured binding syntax](http://wg21.link/P0144r2)
 which will make the returned tuple more convenient to use:
 
 ``` Cpp

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,18 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
-#include <folly/Function.h>
-#include <folly/Optional.h>
-#include <folly/fibers/detail/AtomicBatchDispatcher.h>
-#include <folly/futures/Future.h>
-#include <folly/futures/Promise.h>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <folly/CPortability.h>
+#include <folly/Function.h>
+#include <folly/Optional.h>
+#include <folly/fibers/detail/AtomicBatchDispatcher.h>
+#include <folly/futures/Future.h>
+#include <folly/futures/Promise.h>
 
 namespace folly {
 namespace fibers {
@@ -35,7 +38,7 @@ namespace fibers {
  * Examples are, multiple dispatch calls on the same token, trying to get more
  * tokens from the dispatcher after commit has been called, etc.
  */
-class ABDUsageException : public std::logic_error {
+class FOLLY_EXPORT ABDUsageException : public std::logic_error {
   using std::logic_error::logic_error;
 };
 
@@ -43,7 +46,7 @@ class ABDUsageException : public std::logic_error {
  * An exception class that gets set on the promise for dispatched tokens, when
  * the AtomicBatchDispatcher was destroyed before commit was called on it.
  */
-class ABDCommitNotCalledException : public std::runtime_error {
+class FOLLY_EXPORT ABDCommitNotCalledException : public std::runtime_error {
  public:
   ABDCommitNotCalledException()
       : std::runtime_error(
@@ -57,7 +60,7 @@ class ABDCommitNotCalledException : public std::runtime_error {
  * Only here so that the caller can distinguish the real failure cause
  * rather than these subsequently thrown exceptions.
  */
-class ABDTokenNotDispatchedException : public std::runtime_error {
+class FOLLY_EXPORT ABDTokenNotDispatchedException : public std::runtime_error {
   using std::runtime_error::runtime_error;
 };
 

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,10 +16,15 @@
 
 #pragma once
 
-#include <folly/Portability.h>
+#include <type_traits>
 
-#if !FOLLY_X64 && !FOLLY_PPC64 && !FOLLY_A64
-# error "PackedSyncPtr is x64, ppc64 or aarch64 specific code."
+#include <glog/logging.h>
+
+#include <folly/Portability.h>
+#include <folly/synchronization/SmallLocks.h>
+
+#if !FOLLY_X64 && !FOLLY_PPC64 && !FOLLY_AARCH64
+#error "PackedSyncPtr is x64, ppc64 or aarch64 specific code."
 #endif
 
 /*
@@ -52,20 +57,16 @@
  * @author Jordan DeLong <delong.j@fb.com>
  */
 
-#include <folly/SmallLocks.h>
-#include <type_traits>
-#include <glog/logging.h>
-
 namespace folly {
 
-template<class T>
+template <class T>
 class PackedSyncPtr {
   // This just allows using this class even with T=void.  Attempting
   // to use the operator* or operator[] on a PackedSyncPtr<void> will
   // still properly result in a compile error.
   typedef typename std::add_lvalue_reference<T>::type reference;
 
-public:
+ public:
   /*
    * If you default construct one of these, you must call this init()
    * function before using it.
@@ -73,7 +74,7 @@ public:
    * (We are avoiding a constructor to ensure gcc allows us to put
    * this class in packed structures.)
    */
-  void init(T* initialPtr = 0, uint16_t initialExtra = 0) {
+  void init(T* initialPtr = nullptr, uint16_t initialExtra = 0) {
     auto intPtr = reinterpret_cast<uintptr_t>(initialPtr);
     CHECK(!(intPtr >> 48));
     data_.init(intPtr);
@@ -117,9 +118,7 @@ public:
    *
    * It is ok to call this without holding the lock.
    */
-  uint16_t extra() const {
-    return data_.getData() >> 48;
-  }
+  uint16_t extra() const { return data_.getData() >> 48; }
 
   /*
    * Don't try to put anything into this that has the high bit set:
@@ -138,15 +137,17 @@ public:
 } FOLLY_PACK_ATTR;
 
 static_assert(
-    std::is_pod<PackedSyncPtr<void>>::value,
+    std::is_standard_layout<PackedSyncPtr<void>>::value &&
+        std::is_trivial<PackedSyncPtr<void>>::value,
     "PackedSyncPtr must be kept a POD type.");
-static_assert(sizeof(PackedSyncPtr<void>) == 8,
-              "PackedSyncPtr should be only 8 bytes---something is "
-              "messed up");
+static_assert(
+    sizeof(PackedSyncPtr<void>) == 8,
+    "PackedSyncPtr should be only 8 bytes---something is "
+    "messed up");
 
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const PackedSyncPtr<T>& ptr) {
   os << "PackedSyncPtr(" << ptr.get() << ", " << ptr.extra() << ")";
   return os;
 }
-}
+} // namespace folly

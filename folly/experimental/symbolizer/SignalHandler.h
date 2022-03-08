@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,9 +16,12 @@
 
 #pragma once
 
-#include <functional>
+#include <bitset>
 
-namespace folly { namespace symbolizer {
+namespace folly {
+namespace symbolizer {
+
+extern const unsigned long kAllFatalSignals;
 
 /**
  * Install handler for fatal signals. The list of signals being handled is in
@@ -26,8 +29,13 @@ namespace folly { namespace symbolizer {
  *
  * The handler will dump signal and time information followed by a stack trace
  * to stderr, and then call the callbacks registered below.
+ *
+ * The signals parameter can be used to specify only specific fatal signals for
+ * which the handler should be installed.  Only signals from kAllFatalSignals
+ * are honored in this list, other signals are ignored.
  */
-void installFatalSignalHandler();
+void installFatalSignalHandler(
+    std::bitset<64> signals = std::bitset<64>(kAllFatalSignals));
 
 /**
  * Add a callback to be run when receiving a fatal signal. They will also
@@ -39,8 +47,8 @@ void installFatalSignalHandler();
  * All these fatal callback must be added before calling
  * installFatalSignalCallbacks(), below.
  */
-typedef void (*SignalCallback)(void);
-void addFatalSignalCallback(SignalCallback callback);
+typedef void (*SignalCallback)();
+void addFatalSignalCallback(SignalCallback cb);
 
 /**
  * Install the fatal signal callbacks; fatal signals will call these
@@ -48,4 +56,10 @@ void addFatalSignalCallback(SignalCallback callback);
  */
 void installFatalSignalCallbacks();
 
-}}  // namespaces
+/**
+ * True if a fatal signal was received (i.e. the process is crashing).
+ */
+bool fatalSignalReceived();
+
+} // namespace symbolizer
+} // namespace folly

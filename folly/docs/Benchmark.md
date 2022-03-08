@@ -6,10 +6,6 @@ executing benchmarks. Currently the framework targets only
 single-threaded testing (though you can internally use fork-join
 parallelism and measure total run time).
 
-To use this library, you need to be using gcc 4.6 or later. Include
-`folly/Benchmark.h` and make sure `folly/benchmark.cpp` is part of the
-build (either directly or packaged with a library).
-
 ### Overview
 ***
 
@@ -17,7 +13,7 @@ Using `folly/Benchmark.h` is very simple. Here's an example:
 
 ``` Cpp
     #include <folly/Benchmark.h>
-    #include <folly/Foreach.h>
+    #include <folly/container/Foreach.h>
     #include <vector>
     using namespace std;
     using namespace folly;
@@ -71,7 +67,7 @@ implicitly `unsigned`. Consider a slightly reworked example:
 
 ``` Cpp
     #include <folly/Benchmark.h>
-    #include <folly/Foreach.h>
+    #include <folly/container/Foreach.h>
     #include <vector>
     using namespace std;
     using namespace folly;
@@ -120,14 +116,14 @@ numbers should be compared against some baseline.
 
 To support baseline-driven measurements, `folly/Benchmark.h` defines
 `BENCHMARK_RELATIVE`, which works much like `BENCHMARK`, except it
-considers the most recent lexically-ocurring `BENCHMARK` a baseline,
+considers the most recent lexically-occurring `BENCHMARK` a baseline,
 and fills the "relative" column. Say, for example, we want to use
 front insertion for a vector as a baseline and see how back insertion
 compares with it:
 
 ``` Cpp
     #include <folly/Benchmark.h>
-    #include <folly/Foreach.h>
+    #include <folly/container/Foreach.h>
     #include <vector>
     using namespace std;
     using namespace folly;

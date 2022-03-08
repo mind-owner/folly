@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,10 +16,11 @@
 
 #include <folly/experimental/flat_combining/test/FlatCombiningTestHelpers.h>
 
-#include <folly/portability/GTest.h>
-#include <glog/logging.h>
-
 #include <mutex>
+
+#include <folly/portability/GTest.h>
+
+#include <glog/logging.h>
 
 using namespace folly::test;
 
@@ -117,4 +118,4 @@ constexpr Params params[] = {
     {true, false, false, true, false}, // tc async
 };
 
-INSTANTIATE_TEST_CASE_P(Foo, FlatCombiningTest, ::testing::ValuesIn(params));
+INSTANTIATE_TEST_SUITE_P(Foo, FlatCombiningTest, ::testing::ValuesIn(params));

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,14 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// Copyright 2013-present Facebook. All Rights Reserved.
+
 // @author: Pavlo Kushnir (pavlo)
 
 #pragma once
 
 #include <initializer_list>
-#include <memory>
 #include <map>
+#include <memory>
+
 #include <folly/Range.h>
 #include <folly/experimental/StringKeyedCommon.h>
 
@@ -33,15 +34,15 @@ namespace folly {
  * It uses kind of hack: string pointed by StringPiece is copied when
  * StringPiece is inserted into map
  */
-template <class Value,
-          class Compare = std::less<StringPiece>,
-          class Alloc = std::allocator<std::pair<const StringPiece, Value>>>
-class StringKeyedMap
-    : private std::map<StringPiece, Value, Compare, Alloc> {
-private:
+template <
+    class Value,
+    class Compare = std::less<StringPiece>,
+    class Alloc = std::allocator<std::pair<const StringPiece, Value>>>
+class StringKeyedMap : private std::map<StringPiece, Value, Compare, Alloc> {
+ private:
   using Base = std::map<StringPiece, Value, Compare, Alloc>;
 
-public:
+ public:
   typedef typename Base::key_type key_type;
   typedef typename Base::mapped_type mapped_type;
   typedef typename Base::value_type value_type;
@@ -63,20 +64,18 @@ public:
   // Ctors in the same order as
   // http://cplusplus.com/reference/map/map/map/
   explicit StringKeyedMap(
-    const key_compare& comp = key_compare(),
-    const allocator_type& alloc = allocator_type())
-      : Base(comp, alloc) {
-  }
+      const key_compare& comp = key_compare(),
+      const allocator_type& alloc = allocator_type())
+      : Base(comp, alloc) {}
 
-  explicit StringKeyedMap(const allocator_type& alloc)
-      : Base(alloc) {
-  }
+  explicit StringKeyedMap(const allocator_type& alloc) : Base(alloc) {}
 
   template <class InputIterator>
   explicit StringKeyedMap(
-    InputIterator b, InputIterator e,
-    const key_compare& comp = key_compare(),
-    const allocator_type& alloc = allocator_type())
+      InputIterator b,
+      InputIterator e,
+      const key_compare& comp = key_compare(),
+      const allocator_type& alloc = allocator_type())
       : Base(comp, alloc) {
     for (; b != e; ++b) {
       // emplace() will carry the duplication
@@ -85,25 +84,21 @@ public:
   }
 
   StringKeyedMap(const StringKeyedMap& rhs)
-      : StringKeyedMap(rhs, rhs.get_allocator()) {
-  }
+      : StringKeyedMap(rhs, rhs.get_allocator()) {}
 
   StringKeyedMap(const StringKeyedMap& rhs, const allocator_type& a)
-      : StringKeyedMap(rhs.begin(), rhs.end(), rhs.key_comp(), a) {
-  }
+      : StringKeyedMap(rhs.begin(), rhs.end(), rhs.key_comp(), a) {}
 
-  StringKeyedMap(StringKeyedMap&& other) noexcept
-    : Base(std::move(other)) {
-  }
+  StringKeyedMap(StringKeyedMap&& other) noexcept : Base(std::move(other)) {}
 
   StringKeyedMap(StringKeyedMap&& other, const allocator_type& /* a */) noexcept
       : Base(std::move(other) /*, a*/ /* not supported by gcc */) {}
 
-  StringKeyedMap(std::initializer_list<value_type> il,
-     const key_compare& comp = key_compare(),
-     const allocator_type& alloc = allocator_type())
-      : StringKeyedMap(il.begin(), il.end(), comp, alloc) {
-  }
+  StringKeyedMap(
+      std::initializer_list<value_type> il,
+      const key_compare& comp = key_compare(),
+      const allocator_type& alloc = allocator_type())
+      : StringKeyedMap(il.begin(), il.end(), comp, alloc) {}
 
   StringKeyedMap& operator=(const StringKeyedMap& other) & {
     if (this == &other) {
@@ -119,17 +114,17 @@ public:
     return *this;
   }
 
-  using Base::empty;
-  using Base::size;
-  using Base::max_size;
   using Base::begin;
-  using Base::end;
-  using Base::rbegin;
-  using Base::rend;
   using Base::cbegin;
   using Base::cend;
   using Base::crbegin;
   using Base::crend;
+  using Base::empty;
+  using Base::end;
+  using Base::max_size;
+  using Base::rbegin;
+  using Base::rend;
+  using Base::size;
 
   bool operator==(StringKeyedMap const& other) const {
     Base const& lhs = *this;
@@ -149,8 +144,8 @@ public:
   }
 
   using Base::at;
-  using Base::find;
   using Base::count;
+  using Base::find;
   using Base::lower_bound;
   using Base::upper_bound;
 
@@ -160,8 +155,8 @@ public:
     if (it != end()) {
       return {it, false};
     }
-    return Base::emplace(stringPieceDup(key, get_allocator()),
-                         std::forward<Args>(args)...);
+    return Base::emplace(
+        stringPieceDup(key, get_allocator()), std::forward<Args>(args)...);
   }
 
   std::pair<iterator, bool> insert(value_type val) {
@@ -169,9 +164,8 @@ public:
     if (it != end()) {
       return {it, false};
     }
-    return Base::insert(
-      std::make_pair(stringPieceDup(val.first, get_allocator()),
-                     std::move(val.second)));
+    return Base::insert(std::make_pair(
+        stringPieceDup(val.first, get_allocator()), std::move(val.second)));
   }
 
   iterator erase(const_iterator position) {
@@ -197,9 +191,7 @@ public:
     Base::clear();
   }
 
-  void swap(StringKeyedMap& other) & {
-    return Base::swap(other);
-  }
+  using Base::swap;
 
   ~StringKeyedMap() {
     // Here we assume that map doesn't use keys in destructor
@@ -209,4 +201,4 @@ public:
   }
 };
 
-} // folly
+} // namespace folly

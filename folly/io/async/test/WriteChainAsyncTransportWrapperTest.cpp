@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,32 +14,35 @@
  * limitations under the License.
  */
 
-#include <folly/io/async/AsyncTransport.h>
 #include <folly/io/async/WriteChainAsyncTransportWrapper.h>
+
+#include <folly/io/async/AsyncTransport.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 
-using namespace testing;
 using testing::_;
 
 namespace folly {
 namespace test {
 
-class TestWriteChainAsyncTransportWrapper :
-  public WriteChainAsyncTransportWrapper<folly::AsyncTransportWrapper> {
+class TestWriteChainAsyncTransportWrapper
+    : public WriteChainAsyncTransportWrapper<folly::AsyncTransport> {
  public:
-  TestWriteChainAsyncTransportWrapper() :
-    WriteChainAsyncTransportWrapper<folly::AsyncTransportWrapper>(nullptr) {}
+  TestWriteChainAsyncTransportWrapper()
+      : WriteChainAsyncTransportWrapper<folly::AsyncTransport>(nullptr) {}
 
-  MOCK_METHOD3(writeChain, void(
-        folly::AsyncTransportWrapper::WriteCallback*,
-        std::shared_ptr<folly::IOBuf>,
-        folly::WriteFlags));
+  MOCK_METHOD3(
+      writeChain,
+      void(
+          folly::AsyncTransport::WriteCallback*,
+          std::shared_ptr<folly::IOBuf>,
+          folly::WriteFlags));
 
   // gmock doesn't work with the IOBuf&& so we have to wrap this.
-  void writeChain(WriteCallback* callback,
-                  std::unique_ptr<folly::IOBuf>&& iob,
-                  folly::WriteFlags flags = folly::WriteFlags::NONE) override {
+  void writeChain(
+      WriteCallback* callback,
+      std::unique_ptr<folly::IOBuf>&& iob,
+      folly::WriteFlags flags = folly::WriteFlags::NONE) override {
     writeChain(callback, std::shared_ptr<folly::IOBuf>(iob.release()), flags);
   }
 
@@ -48,7 +51,7 @@ class TestWriteChainAsyncTransportWrapper :
 };
 
 MATCHER_P(BufMatches, expected, "") {
-  folly::IOBufEqual eq;
+  folly::IOBufEqualTo eq;
   return eq(*arg, *expected);
 }
 
@@ -82,4 +85,5 @@ TEST(WriteChainAsyncTransportWrapperTest, TestSimpleBuf) {
   transport.write(nullptr, buf->data(), buf->length());
 }
 
-}}
+} // namespace test
+} // namespace folly

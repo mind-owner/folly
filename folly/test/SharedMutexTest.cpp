@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,6 +17,8 @@
 #include <folly/SharedMutex.h>
 
 #include <stdlib.h>
+
+#include <random>
 #include <thread>
 #include <vector>
 
@@ -25,21 +27,26 @@
 
 #include <folly/Benchmark.h>
 #include <folly/MPMCQueue.h>
-#include <folly/RWSpinLock.h>
 #include <folly/portability/GFlags.h>
 #include <folly/portability/GTest.h>
+#include <folly/synchronization/RWSpinLock.h>
 #include <folly/test/DeterministicSchedule.h>
+#include <folly/test/TestUtils.h>
 
 using namespace folly;
 using namespace folly::test;
 using namespace std;
-using namespace chrono;
+using namespace std::chrono;
 
-typedef DeterministicSchedule DSched;
-typedef SharedMutexImpl<true, void, DeterministicAtomic, true>
-    DSharedMutexReadPriority;
-typedef SharedMutexImpl<false, void, DeterministicAtomic, true>
-    DSharedMutexWritePriority;
+struct DSharedMutexPolicy : SharedMutexPolicyDefault {
+  static constexpr uint32_t max_spin_count = 0;
+  static constexpr uint32_t max_soft_yield_count = 0;
+};
+using DSched = DeterministicSchedule;
+using DSharedMutexReadPriority =
+    SharedMutexImpl<true, void, DeterministicAtomic, DSharedMutexPolicy>;
+using DSharedMutexWritePriority =
+    SharedMutexImpl<false, void, DeterministicAtomic, DSharedMutexPolicy>;
 
 template <typename Lock>
 void runBasicTest() {
@@ -48,13 +55,19 @@ void runBasicTest() {
   SharedMutexToken token2;
   SharedMutexToken token3;
 
+  EXPECT_TRUE(lock.eligible_for_lock_elision());
   EXPECT_TRUE(lock.try_lock());
+  EXPECT_FALSE(lock.eligible_for_lock_elision());
   EXPECT_FALSE(lock.try_lock());
+  EXPECT_FALSE(lock.eligible_for_lock_shared_elision());
   EXPECT_FALSE(lock.try_lock_shared(token1));
   lock.unlock();
 
+  EXPECT_TRUE(lock.eligible_for_lock_shared_elision());
   EXPECT_TRUE(lock.try_lock_shared(token1));
+  EXPECT_FALSE(lock.eligible_for_lock_elision());
   EXPECT_FALSE(lock.try_lock());
+  EXPECT_TRUE(lock.eligible_for_lock_shared_elision());
   EXPECT_TRUE(lock.try_lock_shared(token2));
   lock.lock_shared(token3);
   lock.unlock_shared(token3);
@@ -79,6 +92,8 @@ void runBasicTest() {
 TEST(SharedMutex, basic) {
   runBasicTest<SharedMutexReadPriority>();
   runBasicTest<SharedMutexWritePriority>();
+  runBasicTest<SharedMutexSuppressTSAN>();
+  runBasicTest<SharedMutexTracked>();
 }
 
 template <typename Lock>
@@ -89,44 +104,57 @@ void runBasicHoldersTest() {
   {
     // create an exclusive write lock via holder
     typename Lock::WriteHolder holder(lock);
+    EXPECT_FALSE(lock.eligible_for_lock_elision());
     EXPECT_FALSE(lock.try_lock());
+    EXPECT_FALSE(lock.eligible_for_lock_shared_elision());
     EXPECT_FALSE(lock.try_lock_shared(token));
 
     // move ownership to another write holder via move constructor
     typename Lock::WriteHolder holder2(std::move(holder));
+    EXPECT_FALSE(lock.eligible_for_lock_elision());
     EXPECT_FALSE(lock.try_lock());
+    EXPECT_FALSE(lock.eligible_for_lock_shared_elision());
     EXPECT_FALSE(lock.try_lock_shared(token));
 
     // move ownership to another write holder via assign operator
     typename Lock::WriteHolder holder3(nullptr);
     holder3 = std::move(holder2);
+    EXPECT_FALSE(lock.eligible_for_lock_elision());
     EXPECT_FALSE(lock.try_lock());
+    EXPECT_FALSE(lock.eligible_for_lock_shared_elision());
     EXPECT_FALSE(lock.try_lock_shared(token));
 
     // downgrade from exclusive to upgrade lock via move constructor
     typename Lock::UpgradeHolder holder4(std::move(holder3));
 
     // ensure we can lock from a shared source
+    EXPECT_FALSE(lock.eligible_for_lock_elision());
     EXPECT_FALSE(lock.try_lock());
+    EXPECT_TRUE(lock.eligible_for_lock_shared_elision());
     EXPECT_TRUE(lock.try_lock_shared(token));
     lock.unlock_shared(token);
 
     // promote from upgrade to exclusive lock via move constructor
     typename Lock::WriteHolder holder5(std::move(holder4));
+    EXPECT_FALSE(lock.eligible_for_lock_elision());
     EXPECT_FALSE(lock.try_lock());
+    EXPECT_FALSE(lock.eligible_for_lock_shared_elision());
     EXPECT_FALSE(lock.try_lock_shared(token));
 
     // downgrade exclusive to shared lock via move constructor
     typename Lock::ReadHolder holder6(std::move(holder5));
 
     // ensure we can lock from another shared source
+    EXPECT_FALSE(lock.eligible_for_lock_elision());
     EXPECT_FALSE(lock.try_lock());
+    EXPECT_TRUE(lock.eligible_for_lock_shared_elision());
     EXPECT_TRUE(lock.try_lock_shared(token));
     lock.unlock_shared(token);
   }
 
   {
     typename Lock::WriteHolder holder(lock);
+    EXPECT_FALSE(lock.eligible_for_lock_elision());
     EXPECT_FALSE(lock.try_lock());
   }
 
@@ -146,6 +174,8 @@ void runBasicHoldersTest() {
 TEST(SharedMutex, basic_holders) {
   runBasicHoldersTest<SharedMutexReadPriority>();
   runBasicHoldersTest<SharedMutexWritePriority>();
+  runBasicHoldersTest<SharedMutexSuppressTSAN>();
+  runBasicHoldersTest<SharedMutexTracked>();
 }
 
 template <typename Lock>
@@ -155,18 +185,25 @@ void runManyReadLocksTestWithTokens() {
   vector<SharedMutexToken> tokens;
   for (int i = 0; i < 1000; ++i) {
     tokens.emplace_back();
+    EXPECT_TRUE(lock.eligible_for_lock_shared_elision());
     EXPECT_TRUE(lock.try_lock_shared(tokens.back()));
   }
   for (auto& token : tokens) {
     lock.unlock_shared(token);
   }
+
   EXPECT_TRUE(lock.try_lock());
   lock.unlock();
 }
 
 TEST(SharedMutex, many_read_locks_with_tokens) {
+  // This test fails in an assertion in the TSAN library because there are too
+  // many mutexes
+  SKIP_IF(folly::kIsSanitizeThread);
   runManyReadLocksTestWithTokens<SharedMutexReadPriority>();
   runManyReadLocksTestWithTokens<SharedMutexWritePriority>();
+  runManyReadLocksTestWithTokens<SharedMutexSuppressTSAN>();
+  runManyReadLocksTestWithTokens<SharedMutexTracked>();
 }
 
 template <typename Lock>
@@ -174,18 +211,25 @@ void runManyReadLocksTestWithoutTokens() {
   Lock lock;
 
   for (int i = 0; i < 1000; ++i) {
+    EXPECT_TRUE(lock.eligible_for_lock_shared_elision());
     EXPECT_TRUE(lock.try_lock_shared());
   }
   for (int i = 0; i < 1000; ++i) {
     lock.unlock_shared();
   }
+
   EXPECT_TRUE(lock.try_lock());
   lock.unlock();
 }
 
 TEST(SharedMutex, many_read_locks_without_tokens) {
+  // This test fails in an assertion in the TSAN library because there are too
+  // many mutexes
+  SKIP_IF(folly::kIsSanitizeThread);
   runManyReadLocksTestWithoutTokens<SharedMutexReadPriority>();
   runManyReadLocksTestWithoutTokens<SharedMutexWritePriority>();
+  runManyReadLocksTestWithoutTokens<SharedMutexSuppressTSAN>();
+  runManyReadLocksTestWithoutTokens<SharedMutexTracked>();
 }
 
 template <typename Lock>
@@ -215,6 +259,8 @@ void runTimeoutInPastTest() {
 TEST(SharedMutex, timeout_in_past) {
   runTimeoutInPastTest<SharedMutexReadPriority>();
   runTimeoutInPastTest<SharedMutexWritePriority>();
+  runTimeoutInPastTest<SharedMutexSuppressTSAN>();
+  runTimeoutInPastTest<SharedMutexTracked>();
 }
 
 template <class Func>
@@ -301,6 +347,8 @@ void runFailingTryTimeoutTest() {
 TEST(SharedMutex, failing_try_timeout) {
   runFailingTryTimeoutTest<SharedMutexReadPriority>();
   runFailingTryTimeoutTest<SharedMutexWritePriority>();
+  runFailingTryTimeoutTest<SharedMutexSuppressTSAN>();
+  runFailingTryTimeoutTest<SharedMutexTracked>();
 }
 
 template <typename Lock>
@@ -309,14 +357,20 @@ void runBasicUpgradeTest() {
   typename Lock::Token token1;
   typename Lock::Token token2;
 
+  EXPECT_TRUE(lock.eligible_for_lock_upgrade_elision());
   lock.lock_upgrade();
+  EXPECT_FALSE(lock.eligible_for_lock_upgrade_elision());
+  EXPECT_FALSE(lock.eligible_for_lock_elision());
   EXPECT_FALSE(lock.try_lock());
+  EXPECT_TRUE(lock.eligible_for_lock_shared_elision());
   EXPECT_TRUE(lock.try_lock_shared(token1));
   lock.unlock_shared(token1);
   lock.unlock_upgrade();
 
+  EXPECT_TRUE(lock.eligible_for_lock_upgrade_elision());
   lock.lock_upgrade();
   lock.unlock_upgrade_and_lock();
+  EXPECT_FALSE(lock.eligible_for_lock_shared_elision());
   EXPECT_FALSE(lock.try_lock_shared(token1));
   lock.unlock();
 
@@ -329,6 +383,7 @@ void runBasicUpgradeTest() {
 
   lock.lock();
   lock.unlock_and_lock_upgrade();
+  EXPECT_TRUE(lock.eligible_for_lock_shared_elision());
   EXPECT_TRUE(lock.try_lock_shared(token1));
   lock.unlock_upgrade();
   lock.unlock_shared(token1);
@@ -337,6 +392,8 @@ void runBasicUpgradeTest() {
 TEST(SharedMutex, basic_upgrade_tests) {
   runBasicUpgradeTest<SharedMutexReadPriority>();
   runBasicUpgradeTest<SharedMutexWritePriority>();
+  runBasicUpgradeTest<SharedMutexSuppressTSAN>();
+  runBasicUpgradeTest<SharedMutexTracked>();
 }
 
 TEST(SharedMutex, read_has_prio) {
@@ -392,67 +449,67 @@ struct TokenLocker {
   SharedMutexToken token;
 
   template <typename T>
-  void lock(T* lock) {
-    lock->lock();
+  void lock(T* lockable) {
+    lockable->lock();
   }
 
   template <typename T>
-  void unlock(T* lock) {
-    lock->unlock();
+  void unlock(T* lockable) {
+    lockable->unlock();
   }
 
   template <typename T>
-  void lock_shared(T* lock) {
-    lock->lock_shared(token);
+  void lock_shared(T* lockable) {
+    lockable->lock_shared(token);
   }
 
   template <typename T>
-  void unlock_shared(T* lock) {
-    lock->unlock_shared(token);
+  void unlock_shared(T* lockable) {
+    lockable->unlock_shared(token);
   }
 };
 
 struct Locker {
   template <typename T>
-  void lock(T* lock) {
-    lock->lock();
+  void lock(T* lockable) {
+    lockable->lock();
   }
 
   template <typename T>
-  void unlock(T* lock) {
-    lock->unlock();
+  void unlock(T* lockable) {
+    lockable->unlock();
   }
 
   template <typename T>
-  void lock_shared(T* lock) {
-    lock->lock_shared();
+  void lock_shared(T* lockable) {
+    lockable->lock_shared();
   }
 
   template <typename T>
-  void unlock_shared(T* lock) {
-    lock->unlock_shared();
+  void unlock_shared(T* lockable) {
+    lockable->unlock_shared();
   }
 };
 
 struct EnterLocker {
   template <typename T>
-  void lock(T* lock) {
-    lock->lock(0);
+  void lock(T* lockable) {
+    lockable->lock(0);
   }
 
   template <typename T>
-  void unlock(T* lock) {
-    lock->unlock();
+  void unlock(T* lockable) {
+    lockable->unlock();
   }
 
   template <typename T>
-  void lock_shared(T* lock) {
-    lock->enter(0);
+  void lock_shared(T* lockable) {
+    lockable->enter(0);
   }
 
   template <typename T>
-  void unlock_shared(T* lock) {
-    lock->leave();
+  void unlock_shared(T* lockable) {
+    lockable->leave();
   }
 };
 
@@ -489,15 +546,14 @@ struct PosixMutex {
 };
 
 template <template <typename> class Atom, typename Lock, typename Locker>
-static void runContendedReaders(size_t numOps,
-                                size_t numThreads,
-                                bool useSeparateLocks) {
-  char padding1[64];
-  (void)padding1;
-  Lock globalLock;
-  int valueProtectedByLock = 10;
-  char padding2[64];
-  (void)padding2;
+static void runContendedReaders(
+    size_t numOps, size_t numThreads, bool useSeparateLocks) {
+  struct alignas(hardware_destructive_interference_size)
+      GlobalLockAndProtectedValue {
+    Lock globalLock;
+    int valueProtectedByLock = 10;
+  };
+  GlobalLockAndProtectedValue padded;
   Atom<bool> go(false);
   Atom<bool>* goPtr = &go; // workaround for clang bug
   vector<thread> threads(numThreads);
@@ -506,7 +562,7 @@ static void runContendedReaders(size_t numOps,
     for (size_t t = 0; t < numThreads; ++t) {
       threads[t] = DSched::thread([&, t, numThreads] {
         Lock privateLock;
-        Lock* lock = useSeparateLocks ? &privateLock : &globalLock;
+        Lock* lock = useSeparateLocks ? &privateLock : &(padded.globalLock);
         Locker locker;
         while (!goPtr->load()) {
           this_thread::yield();
@@ -516,7 +572,7 @@ static void runContendedReaders(size_t numOps,
           // note: folly::doNotOptimizeAway reads and writes to its arg,
           // so the following two lines are very different than a call
           // to folly::doNotOptimizeAway(valueProtectedByLock);
-          auto copy = valueProtectedByLock;
+          auto copy = padded.valueProtectedByLock;
           folly::doNotOptimizeAway(copy);
           locker.unlock_shared(lock);
         }
@@ -530,73 +586,66 @@ static void runContendedReaders(size_t numOps,
   }
 }
 
-static void folly_rwspin_reads(uint32_t numOps,
-                               size_t numThreads,
-                               bool useSeparateLocks) {
+static void folly_rwspin_reads(
+    uint32_t numOps, size_t numThreads, bool useSeparateLocks) {
   runContendedReaders<atomic, RWSpinLock, Locker>(
       numOps, numThreads, useSeparateLocks);
 }
 
-static void shmtx_wr_pri_reads(uint32_t numOps,
-                               size_t numThreads,
-                               bool useSeparateLocks) {
+static void shmtx_wr_pri_reads(
+    uint32_t numOps, size_t numThreads, bool useSeparateLocks) {
   runContendedReaders<atomic, SharedMutexWritePriority, TokenLocker>(
       numOps, numThreads, useSeparateLocks);
 }
 
-static void shmtx_w_bare_reads(uint32_t numOps,
-                               size_t numThreads,
-                               bool useSeparateLocks) {
+static void shmtx_w_bare_reads(
+    uint32_t numOps, size_t numThreads, bool useSeparateLocks) {
   runContendedReaders<atomic, SharedMutexWritePriority, Locker>(
       numOps, numThreads, useSeparateLocks);
 }
 
-static void shmtx_rd_pri_reads(uint32_t numOps,
-                               size_t numThreads,
-                               bool useSeparateLocks) {
+static void shmtx_rd_pri_reads(
+    uint32_t numOps, size_t numThreads, bool useSeparateLocks) {
   runContendedReaders<atomic, SharedMutexReadPriority, TokenLocker>(
       numOps, numThreads, useSeparateLocks);
 }
 
-static void shmtx_r_bare_reads(uint32_t numOps,
-                               size_t numThreads,
-                               bool useSeparateLocks) {
+static void shmtx_r_bare_reads(
+    uint32_t numOps, size_t numThreads, bool useSeparateLocks) {
   runContendedReaders<atomic, SharedMutexReadPriority, Locker>(
       numOps, numThreads, useSeparateLocks);
 }
 
-static void folly_ticket_reads(uint32_t numOps,
-                               size_t numThreads,
-                               bool useSeparateLocks) {
+static void folly_ticket_reads(
+    uint32_t numOps, size_t numThreads, bool useSeparateLocks) {
   runContendedReaders<atomic, RWTicketSpinLock64, Locker>(
       numOps, numThreads, useSeparateLocks);
 }
 
-static void boost_shared_reads(uint32_t numOps,
-                               size_t numThreads,
-                               bool useSeparateLocks) {
+static void boost_shared_reads(
+    uint32_t numOps, size_t numThreads, bool useSeparateLocks) {
   runContendedReaders<atomic, boost::shared_mutex, Locker>(
       numOps, numThreads, useSeparateLocks);
 }
 
-static void pthrd_rwlock_reads(uint32_t numOps,
-                               size_t numThreads,
-                               bool useSeparateLocks) {
+static void pthrd_rwlock_reads(
+    uint32_t numOps, size_t numThreads, bool useSeparateLocks) {
   runContendedReaders<atomic, PosixRWLock, Locker>(
       numOps, numThreads, useSeparateLocks);
 }
 
 template <template <typename> class Atom, typename Lock, typename Locker>
-static void runMixed(size_t numOps,
-                     size_t numThreads,
-                     double writeFraction,
-                     bool useSeparateLocks) {
-  char padding1[64];
-  (void)padding1;
-  Lock globalLock;
-  int valueProtectedByLock = 0;
-  char padding2[64];
-  (void)padding2;
+static void runMixed(
+    size_t numOps,
+    size_t numThreads,
+    double writeFraction,
+    bool useSeparateLocks) {
+  struct alignas(hardware_destructive_interference_size)
+      GlobalLockAndProtectedValue {
+    Lock globalLock;
+    int valueProtectedByLock = 0;
+  };
+  GlobalLockAndProtectedValue padded;
   Atom<bool> go(false);
   Atom<bool>* goPtr = &go; // workaround for clang bug
   vector<thread> threads(numThreads);
@@ -604,28 +653,28 @@ static void runMixed(size_t numOps,
   BENCHMARK_SUSPEND {
     for (size_t t = 0; t < numThreads; ++t) {
       threads[t] = DSched::thread([&, t, numThreads] {
-        struct drand48_data buffer;
-        srand48_r(t, &buffer);
-        long writeThreshold = writeFraction * 0x7fffffff;
+        std::minstd_rand engine;
+        engine.seed(t);
+
+        long writeThreshold = to_integral(writeFraction * 0x7fffffff);
         Lock privateLock;
-        Lock* lock = useSeparateLocks ? &privateLock : &globalLock;
+        Lock* lock = useSeparateLocks ? &privateLock : &(padded.globalLock);
         Locker locker;
         while (!goPtr->load()) {
           this_thread::yield();
         }
         for (size_t op = t; op < numOps; op += numThreads) {
-          long randVal;
-          lrand48_r(&buffer, &randVal);
+          long randVal = engine();
           bool writeOp = randVal < writeThreshold;
           if (writeOp) {
             locker.lock(lock);
             if (!useSeparateLocks) {
-              ++valueProtectedByLock;
+              ++(padded.valueProtectedByLock);
             }
             locker.unlock(lock);
           } else {
             locker.lock_shared(lock);
-            auto v = valueProtectedByLock;
+            auto v = padded.valueProtectedByLock;
             folly::doNotOptimizeAway(v);
             locker.unlock_shared(lock);
           }
@@ -640,74 +689,83 @@ static void runMixed(size_t numOps,
   }
 }
 
-static void folly_rwspin(size_t numOps,
-                         size_t numThreads,
-                         double writeFraction,
-                         bool useSeparateLocks) {
+static void folly_rwspin(
+    size_t numOps,
+    size_t numThreads,
+    double writeFraction,
+    bool useSeparateLocks) {
   runMixed<atomic, RWSpinLock, Locker>(
       numOps, numThreads, writeFraction, useSeparateLocks);
 }
 
-static void shmtx_wr_pri(uint32_t numOps,
-                         size_t numThreads,
-                         double writeFraction,
-                         bool useSeparateLocks) {
+static void shmtx_wr_pri(
+    uint32_t numOps,
+    size_t numThreads,
+    double writeFraction,
+    bool useSeparateLocks) {
   runMixed<atomic, SharedMutexWritePriority, TokenLocker>(
       numOps, numThreads, writeFraction, useSeparateLocks);
 }
 
-static void shmtx_w_bare(uint32_t numOps,
-                         size_t numThreads,
-                         double writeFraction,
-                         bool useSeparateLocks) {
+static void shmtx_w_bare(
+    uint32_t numOps,
+    size_t numThreads,
+    double writeFraction,
+    bool useSeparateLocks) {
   runMixed<atomic, SharedMutexWritePriority, Locker>(
       numOps, numThreads, writeFraction, useSeparateLocks);
 }
 
-static void shmtx_rd_pri(uint32_t numOps,
-                         size_t numThreads,
-                         double writeFraction,
-                         bool useSeparateLocks) {
+static void shmtx_rd_pri(
+    uint32_t numOps,
+    size_t numThreads,
+    double writeFraction,
+    bool useSeparateLocks) {
   runMixed<atomic, SharedMutexReadPriority, TokenLocker>(
       numOps, numThreads, writeFraction, useSeparateLocks);
 }
 
-static void shmtx_r_bare(uint32_t numOps,
-                         size_t numThreads,
-                         double writeFraction,
-                         bool useSeparateLocks) {
+static void shmtx_r_bare(
+    uint32_t numOps,
+    size_t numThreads,
+    double writeFraction,
+    bool useSeparateLocks) {
   runMixed<atomic, SharedMutexReadPriority, Locker>(
       numOps, numThreads, writeFraction, useSeparateLocks);
 }
 
-static void folly_ticket(size_t numOps,
-                         size_t numThreads,
-                         double writeFraction,
-                         bool useSeparateLocks) {
+static void folly_ticket(
+    size_t numOps,
+    size_t numThreads,
+    double writeFraction,
+    bool useSeparateLocks) {
   runMixed<atomic, RWTicketSpinLock64, Locker>(
       numOps, numThreads, writeFraction, useSeparateLocks);
 }
 
-static void boost_shared(size_t numOps,
-                         size_t numThreads,
-                         double writeFraction,
-                         bool useSeparateLocks) {
+static void boost_shared(
+    size_t numOps,
+    size_t numThreads,
+    double writeFraction,
+    bool useSeparateLocks) {
   runMixed<atomic, boost::shared_mutex, Locker>(
       numOps, numThreads, writeFraction, useSeparateLocks);
 }
 
-static void pthrd_rwlock(size_t numOps,
-                         size_t numThreads,
-                         double writeFraction,
-                         bool useSeparateLocks) {
+static void pthrd_rwlock(
+    size_t numOps,
+    size_t numThreads,
+    double writeFraction,
+    bool useSeparateLocks) {
   runMixed<atomic, PosixRWLock, Locker>(
       numOps, numThreads, writeFraction, useSeparateLocks);
 }
 
-static void pthrd_mutex_(size_t numOps,
-                         size_t numThreads,
-                         double writeFraction,
-                         bool useSeparateLocks) {
+static void pthrd_mutex_(
+    size_t numOps,
+    size_t numThreads,
+    double writeFraction,
+    bool useSeparateLocks) {
   runMixed<atomic, PosixMutex, Locker>(
       numOps, numThreads, writeFraction, useSeparateLocks);
 }
@@ -732,8 +790,8 @@ static void runAllAndValidate(size_t numOps, size_t numThreads) {
   BENCHMARK_SUSPEND {
     for (size_t t = 0; t < numThreads; ++t) {
       threads[t] = DSched::thread([&, t, numThreads] {
-        struct drand48_data buffer;
-        srand48_r(t, &buffer);
+        std::minstd_rand engine;
+        engine.seed(t);
 
         bool exclusive = false;
         bool upgrade = false;
@@ -749,8 +807,7 @@ static void runAllAndValidate(size_t numOps, size_t numThreads) {
         }
         for (size_t op = t; op < numOps; op += numThreads) {
           // randVal in [0,1000)
-          long randVal;
-          lrand48_r(&buffer, &randVal);
+          long randVal = engine();
           randVal = (long)((randVal * (uint64_t)1000) / 0x7fffffff);
 
           // make as many assertions as possible about the global state
@@ -868,8 +925,8 @@ static void runAllAndValidate(size_t numOps, size_t numThreads) {
             } else if (randVal < 600) {
               shared = globalLock.try_lock_shared_for(dt);
             } else if (randVal < 800) {
-              shared = globalLock.try_lock_shared_until(
-                  system_clock::now() + dt);
+              shared =
+                  globalLock.try_lock_shared_until(system_clock::now() + dt);
             }
             if (shared) {
               ++*globalSharedCountPtr;
@@ -936,18 +993,16 @@ static void runAllAndValidate(size_t numOps, size_t numThreads) {
 TEST(SharedMutex, deterministic_concurrent_readers_of_one_lock_read_prio) {
   for (int pass = 0; pass < 3; ++pass) {
     DSched sched(DSched::uniform(pass));
-    runContendedReaders<DeterministicAtomic,
-                        DSharedMutexReadPriority,
-                        Locker>(1000, 3, false);
+    runContendedReaders<DeterministicAtomic, DSharedMutexReadPriority, Locker>(
+        1000, 3, false);
   }
 }
 
 TEST(SharedMutex, deterministic_concurrent_readers_of_one_lock_write_prio) {
   for (int pass = 0; pass < 3; ++pass) {
     DSched sched(DSched::uniform(pass));
-    runContendedReaders<DeterministicAtomic,
-                        DSharedMutexWritePriority,
-                        Locker>(1000, 3, false);
+    runContendedReaders<DeterministicAtomic, DSharedMutexWritePriority, Locker>(
+        1000, 3, false);
   }
 }
 
@@ -968,18 +1023,16 @@ TEST(SharedMutex, concurrent_readers_of_one_lock_write_prio) {
 TEST(SharedMutex, deterministic_readers_of_concurrent_locks_read_prio) {
   for (int pass = 0; pass < 3; ++pass) {
     DSched sched(DSched::uniform(pass));
-    runContendedReaders<DeterministicAtomic,
-                        DSharedMutexReadPriority,
-                        Locker>(1000, 3, true);
+    runContendedReaders<DeterministicAtomic, DSharedMutexReadPriority, Locker>(
+        1000, 3, true);
   }
 }
 
 TEST(SharedMutex, deterministic_readers_of_concurrent_locks_write_prio) {
   for (int pass = 0; pass < 3; ++pass) {
     DSched sched(DSched::uniform(pass));
-    runContendedReaders<DeterministicAtomic,
-                        DSharedMutexWritePriority,
-                        Locker>(1000, 3, true);
+    runContendedReaders<DeterministicAtomic, DSharedMutexWritePriority, Locker>(
+        1000, 3, true);
   }
 }
 
@@ -1051,17 +1104,26 @@ TEST(SharedMutex, deterministic_lost_wakeup_write_prio) {
   }
 }
 
+// In TSAN, tests run a lot slower. To avoid test timeouts, adjust the number
+// of repetitions we need for tests.
+static std::size_t adjustReps(std::size_t reps) {
+  if (folly::kIsSanitizeThread) {
+    return reps / 10;
+  }
+  return reps;
+}
+
 TEST(SharedMutex, mixed_mostly_write_read_prio) {
-  for (int pass = 0; pass < 5; ++pass) {
+  for (int pass = 0; pass < (folly::kIsSanitizeAddress ? 1 : 5); ++pass) {
     runMixed<atomic, SharedMutexReadPriority, TokenLocker>(
-        50000, 300, 0.9, false);
+        adjustReps(50000), adjustReps(300), 0.9, false);
   }
 }
 
 TEST(SharedMutex, mixed_mostly_write_write_prio) {
-  for (int pass = 0; pass < 5; ++pass) {
+  for (int pass = 0; pass < (folly::kIsSanitizeAddress ? 1 : 5); ++pass) {
     runMixed<atomic, SharedMutexWritePriority, TokenLocker>(
-        50000, 300, 0.9, false);
+        adjustReps(50000), adjustReps(300), 0.9, false);
   }
 }
 
@@ -1073,6 +1135,8 @@ TEST(SharedMutex, deterministic_all_ops_read_prio) {
 }
 
 TEST(SharedMutex, deterministic_all_ops_write_prio) {
+  // This test fails in TSAN because of noisy lock ordering inversions.
+  SKIP_IF(folly::kIsSanitizeThread);
   for (int pass = 0; pass < 5; ++pass) {
     DSched sched(DSched::uniform(pass));
     runAllAndValidate<DSharedMutexWritePriority, DeterministicAtomic>(1000, 8);
@@ -1086,6 +1150,8 @@ TEST(SharedMutex, all_ops_read_prio) {
 }
 
 TEST(SharedMutex, all_ops_write_prio) {
+  // This test fails in TSAN because of noisy lock ordering inversions.
+  SKIP_IF(folly::kIsSanitizeThread);
   for (int pass = 0; pass < 5; ++pass) {
     runAllAndValidate<SharedMutexWritePriority, atomic>(100000, 32);
   }
@@ -1099,14 +1165,14 @@ FOLLY_ASSUME_FBVECTOR_COMPATIBLE(
 // enqueue the shared lock to a second set of threads that just performs
 // unlocks.  Half of the shared locks use tokens, the others don't.
 template <typename Lock, template <typename> class Atom>
-static void runRemoteUnlock(size_t numOps,
-                            double preWriteFraction,
-                            double preUpgradeFraction,
-                            size_t numSendingThreads,
-                            size_t numReceivingThreads) {
+static void runRemoteUnlock(
+    size_t numOps,
+    double preWriteFraction,
+    double preUpgradeFraction,
+    size_t numSendingThreads,
+    size_t numReceivingThreads) {
   Lock globalLock;
-  MPMCQueue<boost::optional<boost::optional<SharedMutexToken>>, Atom>
-    queue(10);
+  MPMCQueue<boost::optional<boost::optional<SharedMutexToken>>, Atom> queue(10);
   auto queuePtr = &queue; // workaround for clang crash
 
   Atom<bool> go(false);
@@ -1138,15 +1204,14 @@ static void runRemoteUnlock(size_t numOps,
         }
         // else we're a sender
 
-        struct drand48_data buffer;
-        srand48_r(t, &buffer);
+        std::minstd_rand engine;
+        engine.seed(t);
 
         while (!goPtr->load()) {
           this_thread::yield();
         }
         for (size_t op = t; op < numOps; op += numSendingThreads) {
-          long unscaledRandVal;
-          lrand48_r(&buffer, &unscaledRandVal);
+          long unscaledRandVal = engine();
 
           // randVal in [0,1]
           double randVal = ((double)unscaledRandVal) / 0x7fffffff;
@@ -1207,6 +1272,9 @@ static void runRemoteUnlock(size_t numOps,
 }
 
 TEST(SharedMutex, deterministic_remote_write_prio) {
+  // This test fails in an assertion in the TSAN library because there are too
+  // many mutexes
+  SKIP_IF(folly::kIsSanitizeThread);
   for (int pass = 0; pass < 1; ++pass) {
     DSched sched(DSched::uniform(pass));
     runRemoteUnlock<DSharedMutexWritePriority, DeterministicAtomic>(
@@ -1223,13 +1291,19 @@ TEST(SharedMutex, deterministic_remote_read_prio) {
 }
 
 TEST(SharedMutex, remote_write_prio) {
+  // This test fails in an assertion in the TSAN library because there are too
+  // many mutexes
+  SKIP_IF(folly::kIsSanitizeThread);
   for (int pass = 0; pass < 10; ++pass) {
     runRemoteUnlock<SharedMutexWritePriority, atomic>(100000, 0.1, 0.1, 5, 5);
   }
 }
 
 TEST(SharedMutex, remote_read_prio) {
-  for (int pass = 0; pass < 100; ++pass) {
+  // This test fails in an assertion in the TSAN library because there are too
+  // many mutexes
+  SKIP_IF(folly::kIsSanitizeThread);
+  for (int pass = 0; pass < (folly::kIsSanitizeAddress ? 1 : 100); ++pass) {
     runRemoteUnlock<SharedMutexReadPriority, atomic>(100000, 0.1, 0.1, 5, 5);
   }
 }
@@ -1244,21 +1318,19 @@ static void burn(size_t n) {
 // in turn with reader/writer conflict
 template <typename Lock, template <typename> class Atom = atomic>
 static void runPingPong(size_t numRounds, size_t burnCount) {
-  char padding1[56];
-  (void)padding1;
-  pair<Lock, char[56]> locks[3];
-  char padding2[56];
-  (void)padding2;
-
+  struct alignas(hardware_destructive_interference_size) PaddedLock {
+    Lock lock_;
+  };
+  array<PaddedLock, 3> paddedLocks;
   Atom<int> avail(0);
   auto availPtr = &avail; // workaround for clang crash
   Atom<bool> go(false);
   auto goPtr = &go; // workaround for clang crash
   vector<thread> threads(2);
 
-  locks[0].first.lock();
-  locks[1].first.lock();
-  locks[2].first.lock_shared();
+  paddedLocks[0].lock_.lock();
+  paddedLocks[1].lock_.lock();
+  paddedLocks[2].lock_.lock_shared();
 
   BENCHMARK_SUSPEND {
     threads[0] = DSched::thread([&] {
@@ -1267,8 +1339,8 @@ static void runPingPong(size_t numRounds, size_t burnCount) {
         this_thread::yield();
       }
       for (size_t i = 0; i < numRounds; ++i) {
-        locks[i % 3].first.unlock();
-        locks[(i + 2) % 3].first.lock();
+        paddedLocks[i % 3].lock_.unlock();
+        paddedLocks[(i + 2) % 3].lock_.lock();
         burn(burnCount);
       }
     });
@@ -1278,9 +1350,9 @@ static void runPingPong(size_t numRounds, size_t burnCount) {
         this_thread::yield();
       }
       for (size_t i = 0; i < numRounds; ++i) {
-        locks[i % 3].first.lock_shared();
+        paddedLocks[i % 3].lock_.lock_shared();
         burn(burnCount);
-        locks[(i + 2) % 3].first.unlock_shared();
+        paddedLocks[(i + 2) % 3].lock_.unlock_shared();
       }
     });
 
@@ -1293,9 +1365,9 @@ static void runPingPong(size_t numRounds, size_t burnCount) {
   for (auto& thr : threads) {
     DSched::join(thr);
   }
-  locks[numRounds % 3].first.unlock();
-  locks[(numRounds + 1) % 3].first.unlock();
-  locks[(numRounds + 2) % 3].first.unlock_shared();
+  paddedLocks[numRounds % 3].lock_.unlock();
+  paddedLocks[(numRounds + 1) % 3].lock_.unlock();
+  paddedLocks[(numRounds + 2) % 3].lock_.unlock_shared();
 }
 
 static void folly_rwspin_ping_pong(size_t n, size_t scale, size_t burnCount) {
@@ -1323,6 +1395,9 @@ static void pthrd_rwlock_ping_pong(size_t n, size_t scale, size_t burnCount) {
 }
 
 TEST(SharedMutex, deterministic_ping_pong_write_prio) {
+  // This test fails in TSAN because some mutexes are lock_shared() in one
+  // thread and unlock_shared() in a different thread.
+  SKIP_IF(folly::kIsSanitizeThread);
   for (int pass = 0; pass < 1; ++pass) {
     DSched sched(DSched::uniform(pass));
     runPingPong<DSharedMutexWritePriority, DeterministicAtomic>(500, 0);
@@ -1337,6 +1412,9 @@ TEST(SharedMutex, deterministic_ping_pong_read_prio) {
 }
 
 TEST(SharedMutex, ping_pong_write_prio) {
+  // This test fails in TSAN because some mutexes are lock_shared() in one
+  // thread and unlock_shared() in a different thread.
+  SKIP_IF(folly::kIsSanitizeThread);
   for (int pass = 0; pass < 1; ++pass) {
     runPingPong<SharedMutexWritePriority, atomic>(50000, 0);
   }
@@ -1376,315 +1454,315 @@ BENCHMARK(single_thread_lock_unlock, iters) {
 // 100% reads.  Best-case scenario for deferred locks.  Lock is colocated
 // with read data, so inline lock takes cache miss every time but deferred
 // lock has only cache hits and local access.
-BENCHMARK_DRAW_LINE()
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin_reads, 1thread, 1, false)
-BENCH_REL (shmtx_wr_pri_reads, 1thread, 1, false)
-BENCH_REL (shmtx_w_bare_reads, 1thread, 1, false)
-BENCH_REL (shmtx_rd_pri_reads, 1thread, 1, false)
-BENCH_REL (shmtx_r_bare_reads, 1thread, 1, false)
-BENCH_REL (folly_ticket_reads, 1thread, 1, false)
-BENCH_REL (boost_shared_reads, 1thread, 1, false)
-BENCH_REL (pthrd_rwlock_reads, 1thread, 1, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri_reads, 1thread, 1, false)
+BENCH_REL(shmtx_w_bare_reads, 1thread, 1, false)
+BENCH_REL(shmtx_rd_pri_reads, 1thread, 1, false)
+BENCH_REL(shmtx_r_bare_reads, 1thread, 1, false)
+BENCH_REL(folly_ticket_reads, 1thread, 1, false)
+BENCH_REL(boost_shared_reads, 1thread, 1, false)
+BENCH_REL(pthrd_rwlock_reads, 1thread, 1, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin_reads, 2thread, 2, false)
-BENCH_REL (shmtx_wr_pri_reads, 2thread, 2, false)
-BENCH_REL (shmtx_w_bare_reads, 2thread, 2, false)
-BENCH_REL (shmtx_rd_pri_reads, 2thread, 2, false)
-BENCH_REL (shmtx_r_bare_reads, 2thread, 2, false)
-BENCH_REL (folly_ticket_reads, 2thread, 2, false)
-BENCH_REL (boost_shared_reads, 2thread, 2, false)
-BENCH_REL (pthrd_rwlock_reads, 2thread, 2, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri_reads, 2thread, 2, false)
+BENCH_REL(shmtx_w_bare_reads, 2thread, 2, false)
+BENCH_REL(shmtx_rd_pri_reads, 2thread, 2, false)
+BENCH_REL(shmtx_r_bare_reads, 2thread, 2, false)
+BENCH_REL(folly_ticket_reads, 2thread, 2, false)
+BENCH_REL(boost_shared_reads, 2thread, 2, false)
+BENCH_REL(pthrd_rwlock_reads, 2thread, 2, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin_reads, 4thread, 4, false)
-BENCH_REL (shmtx_wr_pri_reads, 4thread, 4, false)
-BENCH_REL (shmtx_w_bare_reads, 4thread, 4, false)
-BENCH_REL (shmtx_rd_pri_reads, 4thread, 4, false)
-BENCH_REL (shmtx_r_bare_reads, 4thread, 4, false)
-BENCH_REL (folly_ticket_reads, 4thread, 4, false)
-BENCH_REL (boost_shared_reads, 4thread, 4, false)
-BENCH_REL (pthrd_rwlock_reads, 4thread, 4, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri_reads, 4thread, 4, false)
+BENCH_REL(shmtx_w_bare_reads, 4thread, 4, false)
+BENCH_REL(shmtx_rd_pri_reads, 4thread, 4, false)
+BENCH_REL(shmtx_r_bare_reads, 4thread, 4, false)
+BENCH_REL(folly_ticket_reads, 4thread, 4, false)
+BENCH_REL(boost_shared_reads, 4thread, 4, false)
+BENCH_REL(pthrd_rwlock_reads, 4thread, 4, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin_reads, 8thread, 8, false)
-BENCH_REL (shmtx_wr_pri_reads, 8thread, 8, false)
-BENCH_REL (shmtx_w_bare_reads, 8thread, 8, false)
-BENCH_REL (shmtx_rd_pri_reads, 8thread, 8, false)
-BENCH_REL (shmtx_r_bare_reads, 8thread, 8, false)
-BENCH_REL (folly_ticket_reads, 8thread, 8, false)
-BENCH_REL (boost_shared_reads, 8thread, 8, false)
-BENCH_REL (pthrd_rwlock_reads, 8thread, 8, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri_reads, 8thread, 8, false)
+BENCH_REL(shmtx_w_bare_reads, 8thread, 8, false)
+BENCH_REL(shmtx_rd_pri_reads, 8thread, 8, false)
+BENCH_REL(shmtx_r_bare_reads, 8thread, 8, false)
+BENCH_REL(folly_ticket_reads, 8thread, 8, false)
+BENCH_REL(boost_shared_reads, 8thread, 8, false)
+BENCH_REL(pthrd_rwlock_reads, 8thread, 8, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin_reads, 16thread, 16, false)
-BENCH_REL (shmtx_wr_pri_reads, 16thread, 16, false)
-BENCH_REL (shmtx_w_bare_reads, 16thread, 16, false)
-BENCH_REL (shmtx_rd_pri_reads, 16thread, 16, false)
-BENCH_REL (shmtx_r_bare_reads, 16thread, 16, false)
-BENCH_REL (folly_ticket_reads, 16thread, 16, false)
-BENCH_REL (boost_shared_reads, 16thread, 16, false)
-BENCH_REL (pthrd_rwlock_reads, 16thread, 16, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri_reads, 16thread, 16, false)
+BENCH_REL(shmtx_w_bare_reads, 16thread, 16, false)
+BENCH_REL(shmtx_rd_pri_reads, 16thread, 16, false)
+BENCH_REL(shmtx_r_bare_reads, 16thread, 16, false)
+BENCH_REL(folly_ticket_reads, 16thread, 16, false)
+BENCH_REL(boost_shared_reads, 16thread, 16, false)
+BENCH_REL(pthrd_rwlock_reads, 16thread, 16, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin_reads, 32thread, 32, false)
-BENCH_REL (shmtx_wr_pri_reads, 32thread, 32, false)
-BENCH_REL (shmtx_w_bare_reads, 32thread, 32, false)
-BENCH_REL (shmtx_rd_pri_reads, 32thread, 32, false)
-BENCH_REL (shmtx_r_bare_reads, 32thread, 32, false)
-BENCH_REL (folly_ticket_reads, 32thread, 32, false)
-BENCH_REL (boost_shared_reads, 32thread, 32, false)
-BENCH_REL (pthrd_rwlock_reads, 32thread, 32, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri_reads, 32thread, 32, false)
+BENCH_REL(shmtx_w_bare_reads, 32thread, 32, false)
+BENCH_REL(shmtx_rd_pri_reads, 32thread, 32, false)
+BENCH_REL(shmtx_r_bare_reads, 32thread, 32, false)
+BENCH_REL(folly_ticket_reads, 32thread, 32, false)
+BENCH_REL(boost_shared_reads, 32thread, 32, false)
+BENCH_REL(pthrd_rwlock_reads, 32thread, 32, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin_reads, 64thread, 64, false)
-BENCH_REL (shmtx_wr_pri_reads, 64thread, 64, false)
-BENCH_REL (shmtx_w_bare_reads, 64thread, 64, false)
-BENCH_REL (shmtx_rd_pri_reads, 64thread, 64, false)
-BENCH_REL (shmtx_r_bare_reads, 64thread, 64, false)
-BENCH_REL (folly_ticket_reads, 64thread, 64, false)
-BENCH_REL (boost_shared_reads, 64thread, 64, false)
-BENCH_REL (pthrd_rwlock_reads, 64thread, 64, false)
+BENCH_REL(shmtx_wr_pri_reads, 64thread, 64, false)
+BENCH_REL(shmtx_w_bare_reads, 64thread, 64, false)
+BENCH_REL(shmtx_rd_pri_reads, 64thread, 64, false)
+BENCH_REL(shmtx_r_bare_reads, 64thread, 64, false)
+BENCH_REL(folly_ticket_reads, 64thread, 64, false)
+BENCH_REL(boost_shared_reads, 64thread, 64, false)
+BENCH_REL(pthrd_rwlock_reads, 64thread, 64, false)
 
 // 1 lock used by everybody, 100% writes.  Threads only hurt, but it is
 // good to not fail catastrophically.  Compare to single_thread_lock_unlock
 // to see the overhead of the generic driver (and its pseudo-random number
 // generator).  pthrd_mutex_ is a pthread_mutex_t (default, not adaptive),
 // which is better than any of the reader-writer locks for this scenario.
-BENCHMARK_DRAW_LINE()
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 1thread_all_write, 1, 1.0, false)
-BENCH_REL (shmtx_wr_pri, 1thread_all_write, 1, 1.0, false)
-BENCH_REL (shmtx_rd_pri, 1thread_all_write, 1, 1.0, false)
-BENCH_REL (folly_ticket, 1thread_all_write, 1, 1.0, false)
-BENCH_REL (boost_shared, 1thread_all_write, 1, 1.0, false)
-BENCH_REL (pthrd_rwlock, 1thread_all_write, 1, 1.0, false)
-BENCH_REL (pthrd_mutex_, 1thread_all_write, 1, 1.0, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 1thread_all_write, 1, 1.0, false)
+BENCH_REL(shmtx_rd_pri, 1thread_all_write, 1, 1.0, false)
+BENCH_REL(folly_ticket, 1thread_all_write, 1, 1.0, false)
+BENCH_REL(boost_shared, 1thread_all_write, 1, 1.0, false)
+BENCH_REL(pthrd_rwlock, 1thread_all_write, 1, 1.0, false)
+BENCH_REL(pthrd_mutex_, 1thread_all_write, 1, 1.0, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 2thread_all_write, 2, 1.0, false)
-BENCH_REL (shmtx_wr_pri, 2thread_all_write, 2, 1.0, false)
-BENCH_REL (shmtx_rd_pri, 2thread_all_write, 2, 1.0, false)
-BENCH_REL (folly_ticket, 2thread_all_write, 2, 1.0, false)
-BENCH_REL (boost_shared, 2thread_all_write, 2, 1.0, false)
-BENCH_REL (pthrd_rwlock, 2thread_all_write, 2, 1.0, false)
-BENCH_REL (pthrd_mutex_, 2thread_all_write, 2, 1.0, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 2thread_all_write, 2, 1.0, false)
+BENCH_REL(shmtx_rd_pri, 2thread_all_write, 2, 1.0, false)
+BENCH_REL(folly_ticket, 2thread_all_write, 2, 1.0, false)
+BENCH_REL(boost_shared, 2thread_all_write, 2, 1.0, false)
+BENCH_REL(pthrd_rwlock, 2thread_all_write, 2, 1.0, false)
+BENCH_REL(pthrd_mutex_, 2thread_all_write, 2, 1.0, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 4thread_all_write, 4, 1.0, false)
-BENCH_REL (shmtx_wr_pri, 4thread_all_write, 4, 1.0, false)
-BENCH_REL (shmtx_rd_pri, 4thread_all_write, 4, 1.0, false)
-BENCH_REL (folly_ticket, 4thread_all_write, 4, 1.0, false)
-BENCH_REL (boost_shared, 4thread_all_write, 4, 1.0, false)
-BENCH_REL (pthrd_rwlock, 4thread_all_write, 4, 1.0, false)
-BENCH_REL (pthrd_mutex_, 4thread_all_write, 4, 1.0, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 4thread_all_write, 4, 1.0, false)
+BENCH_REL(shmtx_rd_pri, 4thread_all_write, 4, 1.0, false)
+BENCH_REL(folly_ticket, 4thread_all_write, 4, 1.0, false)
+BENCH_REL(boost_shared, 4thread_all_write, 4, 1.0, false)
+BENCH_REL(pthrd_rwlock, 4thread_all_write, 4, 1.0, false)
+BENCH_REL(pthrd_mutex_, 4thread_all_write, 4, 1.0, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 8thread_all_write, 8, 1.0, false)
-BENCH_REL (shmtx_wr_pri, 8thread_all_write, 8, 1.0, false)
-BENCH_REL (shmtx_rd_pri, 8thread_all_write, 8, 1.0, false)
-BENCH_REL (folly_ticket, 8thread_all_write, 8, 1.0, false)
-BENCH_REL (boost_shared, 8thread_all_write, 8, 1.0, false)
-BENCH_REL (pthrd_rwlock, 8thread_all_write, 8, 1.0, false)
-BENCH_REL (pthrd_mutex_, 8thread_all_write, 8, 1.0, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 8thread_all_write, 8, 1.0, false)
+BENCH_REL(shmtx_rd_pri, 8thread_all_write, 8, 1.0, false)
+BENCH_REL(folly_ticket, 8thread_all_write, 8, 1.0, false)
+BENCH_REL(boost_shared, 8thread_all_write, 8, 1.0, false)
+BENCH_REL(pthrd_rwlock, 8thread_all_write, 8, 1.0, false)
+BENCH_REL(pthrd_mutex_, 8thread_all_write, 8, 1.0, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 16thread_all_write, 16, 1.0, false)
-BENCH_REL (shmtx_wr_pri, 16thread_all_write, 16, 1.0, false)
-BENCH_REL (shmtx_rd_pri, 16thread_all_write, 16, 1.0, false)
-BENCH_REL (folly_ticket, 16thread_all_write, 16, 1.0, false)
-BENCH_REL (boost_shared, 16thread_all_write, 16, 1.0, false)
-BENCH_REL (pthrd_rwlock, 16thread_all_write, 16, 1.0, false)
-BENCH_REL (pthrd_mutex_, 16thread_all_write, 16, 1.0, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 16thread_all_write, 16, 1.0, false)
+BENCH_REL(shmtx_rd_pri, 16thread_all_write, 16, 1.0, false)
+BENCH_REL(folly_ticket, 16thread_all_write, 16, 1.0, false)
+BENCH_REL(boost_shared, 16thread_all_write, 16, 1.0, false)
+BENCH_REL(pthrd_rwlock, 16thread_all_write, 16, 1.0, false)
+BENCH_REL(pthrd_mutex_, 16thread_all_write, 16, 1.0, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 32thread_all_write, 32, 1.0, false)
-BENCH_REL (shmtx_wr_pri, 32thread_all_write, 32, 1.0, false)
-BENCH_REL (shmtx_rd_pri, 32thread_all_write, 32, 1.0, false)
-BENCH_REL (folly_ticket, 32thread_all_write, 32, 1.0, false)
-BENCH_REL (boost_shared, 32thread_all_write, 32, 1.0, false)
-BENCH_REL (pthrd_rwlock, 32thread_all_write, 32, 1.0, false)
-BENCH_REL (pthrd_mutex_, 32thread_all_write, 32, 1.0, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 32thread_all_write, 32, 1.0, false)
+BENCH_REL(shmtx_rd_pri, 32thread_all_write, 32, 1.0, false)
+BENCH_REL(folly_ticket, 32thread_all_write, 32, 1.0, false)
+BENCH_REL(boost_shared, 32thread_all_write, 32, 1.0, false)
+BENCH_REL(pthrd_rwlock, 32thread_all_write, 32, 1.0, false)
+BENCH_REL(pthrd_mutex_, 32thread_all_write, 32, 1.0, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 64thread_all_write, 64, 1.0, false)
-BENCH_REL (shmtx_wr_pri, 64thread_all_write, 64, 1.0, false)
-BENCH_REL (shmtx_rd_pri, 64thread_all_write, 64, 1.0, false)
-BENCH_REL (folly_ticket, 64thread_all_write, 64, 1.0, false)
-BENCH_REL (boost_shared, 64thread_all_write, 64, 1.0, false)
-BENCH_REL (pthrd_rwlock, 64thread_all_write, 64, 1.0, false)
-BENCH_REL (pthrd_mutex_, 64thread_all_write, 64, 1.0, false)
+BENCH_REL(shmtx_wr_pri, 64thread_all_write, 64, 1.0, false)
+BENCH_REL(shmtx_rd_pri, 64thread_all_write, 64, 1.0, false)
+BENCH_REL(folly_ticket, 64thread_all_write, 64, 1.0, false)
+BENCH_REL(boost_shared, 64thread_all_write, 64, 1.0, false)
+BENCH_REL(pthrd_rwlock, 64thread_all_write, 64, 1.0, false)
+BENCH_REL(pthrd_mutex_, 64thread_all_write, 64, 1.0, false)
 
 // 1 lock used by everybody, 10% writes.  Not much scaling to be had.  Perf
 // is best at 1 thread, once you've got multiple threads > 8 threads hurts.
-BENCHMARK_DRAW_LINE()
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 1thread_10pct_write, 1, 0.10, false)
-BENCH_REL (shmtx_wr_pri, 1thread_10pct_write, 1, 0.10, false)
-BENCH_REL (shmtx_rd_pri, 1thread_10pct_write, 1, 0.10, false)
-BENCH_REL (folly_ticket, 1thread_10pct_write, 1, 0.10, false)
-BENCH_REL (boost_shared, 1thread_10pct_write, 1, 0.10, false)
-BENCH_REL (pthrd_rwlock, 1thread_10pct_write, 1, 0.10, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 1thread_10pct_write, 1, 0.10, false)
+BENCH_REL(shmtx_rd_pri, 1thread_10pct_write, 1, 0.10, false)
+BENCH_REL(folly_ticket, 1thread_10pct_write, 1, 0.10, false)
+BENCH_REL(boost_shared, 1thread_10pct_write, 1, 0.10, false)
+BENCH_REL(pthrd_rwlock, 1thread_10pct_write, 1, 0.10, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 2thread_10pct_write, 2, 0.10, false)
-BENCH_REL (shmtx_wr_pri, 2thread_10pct_write, 2, 0.10, false)
-BENCH_REL (shmtx_rd_pri, 2thread_10pct_write, 2, 0.10, false)
-BENCH_REL (folly_ticket, 2thread_10pct_write, 2, 0.10, false)
-BENCH_REL (boost_shared, 2thread_10pct_write, 2, 0.10, false)
-BENCH_REL (pthrd_rwlock, 2thread_10pct_write, 2, 0.10, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 2thread_10pct_write, 2, 0.10, false)
+BENCH_REL(shmtx_rd_pri, 2thread_10pct_write, 2, 0.10, false)
+BENCH_REL(folly_ticket, 2thread_10pct_write, 2, 0.10, false)
+BENCH_REL(boost_shared, 2thread_10pct_write, 2, 0.10, false)
+BENCH_REL(pthrd_rwlock, 2thread_10pct_write, 2, 0.10, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 4thread_10pct_write, 4, 0.10, false)
-BENCH_REL (shmtx_wr_pri, 4thread_10pct_write, 4, 0.10, false)
-BENCH_REL (shmtx_rd_pri, 4thread_10pct_write, 4, 0.10, false)
-BENCH_REL (folly_ticket, 4thread_10pct_write, 4, 0.10, false)
-BENCH_REL (boost_shared, 4thread_10pct_write, 4, 0.10, false)
-BENCH_REL (pthrd_rwlock, 4thread_10pct_write, 4, 0.10, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 4thread_10pct_write, 4, 0.10, false)
+BENCH_REL(shmtx_rd_pri, 4thread_10pct_write, 4, 0.10, false)
+BENCH_REL(folly_ticket, 4thread_10pct_write, 4, 0.10, false)
+BENCH_REL(boost_shared, 4thread_10pct_write, 4, 0.10, false)
+BENCH_REL(pthrd_rwlock, 4thread_10pct_write, 4, 0.10, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 8thread_10pct_write, 8, 0.10, false)
-BENCH_REL (shmtx_wr_pri, 8thread_10pct_write, 8, 0.10, false)
-BENCH_REL (shmtx_rd_pri, 8thread_10pct_write, 8, 0.10, false)
-BENCH_REL (folly_ticket, 8thread_10pct_write, 8, 0.10, false)
-BENCH_REL (boost_shared, 8thread_10pct_write, 8, 0.10, false)
-BENCH_REL (pthrd_rwlock, 8thread_10pct_write, 8, 0.10, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 8thread_10pct_write, 8, 0.10, false)
+BENCH_REL(shmtx_rd_pri, 8thread_10pct_write, 8, 0.10, false)
+BENCH_REL(folly_ticket, 8thread_10pct_write, 8, 0.10, false)
+BENCH_REL(boost_shared, 8thread_10pct_write, 8, 0.10, false)
+BENCH_REL(pthrd_rwlock, 8thread_10pct_write, 8, 0.10, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 16thread_10pct_write, 16, 0.10, false)
-BENCH_REL (shmtx_wr_pri, 16thread_10pct_write, 16, 0.10, false)
-BENCH_REL (shmtx_rd_pri, 16thread_10pct_write, 16, 0.10, false)
-BENCH_REL (folly_ticket, 16thread_10pct_write, 16, 0.10, false)
-BENCH_REL (boost_shared, 16thread_10pct_write, 16, 0.10, false)
-BENCH_REL (pthrd_rwlock, 16thread_10pct_write, 16, 0.10, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 16thread_10pct_write, 16, 0.10, false)
+BENCH_REL(shmtx_rd_pri, 16thread_10pct_write, 16, 0.10, false)
+BENCH_REL(folly_ticket, 16thread_10pct_write, 16, 0.10, false)
+BENCH_REL(boost_shared, 16thread_10pct_write, 16, 0.10, false)
+BENCH_REL(pthrd_rwlock, 16thread_10pct_write, 16, 0.10, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 32thread_10pct_write, 32, 0.10, false)
-BENCH_REL (shmtx_wr_pri, 32thread_10pct_write, 32, 0.10, false)
-BENCH_REL (shmtx_rd_pri, 32thread_10pct_write, 32, 0.10, false)
-BENCH_REL (folly_ticket, 32thread_10pct_write, 32, 0.10, false)
-BENCH_REL (boost_shared, 32thread_10pct_write, 32, 0.10, false)
-BENCH_REL (pthrd_rwlock, 32thread_10pct_write, 32, 0.10, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 32thread_10pct_write, 32, 0.10, false)
+BENCH_REL(shmtx_rd_pri, 32thread_10pct_write, 32, 0.10, false)
+BENCH_REL(folly_ticket, 32thread_10pct_write, 32, 0.10, false)
+BENCH_REL(boost_shared, 32thread_10pct_write, 32, 0.10, false)
+BENCH_REL(pthrd_rwlock, 32thread_10pct_write, 32, 0.10, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 64thread_10pct_write, 64, 0.10, false)
-BENCH_REL (shmtx_wr_pri, 64thread_10pct_write, 64, 0.10, false)
-BENCH_REL (shmtx_rd_pri, 64thread_10pct_write, 64, 0.10, false)
-BENCH_REL (folly_ticket, 64thread_10pct_write, 64, 0.10, false)
-BENCH_REL (boost_shared, 64thread_10pct_write, 64, 0.10, false)
-BENCH_REL (pthrd_rwlock, 64thread_10pct_write, 64, 0.10, false)
+BENCH_REL(shmtx_wr_pri, 64thread_10pct_write, 64, 0.10, false)
+BENCH_REL(shmtx_rd_pri, 64thread_10pct_write, 64, 0.10, false)
+BENCH_REL(folly_ticket, 64thread_10pct_write, 64, 0.10, false)
+BENCH_REL(boost_shared, 64thread_10pct_write, 64, 0.10, false)
+BENCH_REL(pthrd_rwlock, 64thread_10pct_write, 64, 0.10, false)
 
 // 1 lock used by everybody, 1% writes.  This is a more realistic example
 // than the concurrent_*_reads benchmark, but still shows SharedMutex locks
 // winning over all of the others
-BENCHMARK_DRAW_LINE()
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 1thread_1pct_write, 1, 0.01, false)
-BENCH_REL (shmtx_wr_pri, 1thread_1pct_write, 1, 0.01, false)
-BENCH_REL (shmtx_w_bare, 1thread_1pct_write, 1, 0.01, false)
-BENCH_REL (shmtx_rd_pri, 1thread_1pct_write, 1, 0.01, false)
-BENCH_REL (shmtx_r_bare, 1thread_1pct_write, 1, 0.01, false)
-BENCH_REL (folly_ticket, 1thread_1pct_write, 1, 0.01, false)
-BENCH_REL (boost_shared, 1thread_1pct_write, 1, 0.01, false)
-BENCH_REL (pthrd_rwlock, 1thread_1pct_write, 1, 0.01, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 1thread_1pct_write, 1, 0.01, false)
+BENCH_REL(shmtx_w_bare, 1thread_1pct_write, 1, 0.01, false)
+BENCH_REL(shmtx_rd_pri, 1thread_1pct_write, 1, 0.01, false)
+BENCH_REL(shmtx_r_bare, 1thread_1pct_write, 1, 0.01, false)
+BENCH_REL(folly_ticket, 1thread_1pct_write, 1, 0.01, false)
+BENCH_REL(boost_shared, 1thread_1pct_write, 1, 0.01, false)
+BENCH_REL(pthrd_rwlock, 1thread_1pct_write, 1, 0.01, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 2thread_1pct_write, 2, 0.01, false)
-BENCH_REL (shmtx_wr_pri, 2thread_1pct_write, 2, 0.01, false)
-BENCH_REL (shmtx_w_bare, 2thread_1pct_write, 2, 0.01, false)
-BENCH_REL (shmtx_rd_pri, 2thread_1pct_write, 2, 0.01, false)
-BENCH_REL (shmtx_r_bare, 2thread_1pct_write, 2, 0.01, false)
-BENCH_REL (folly_ticket, 2thread_1pct_write, 2, 0.01, false)
-BENCH_REL (boost_shared, 2thread_1pct_write, 2, 0.01, false)
-BENCH_REL (pthrd_rwlock, 2thread_1pct_write, 2, 0.01, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 2thread_1pct_write, 2, 0.01, false)
+BENCH_REL(shmtx_w_bare, 2thread_1pct_write, 2, 0.01, false)
+BENCH_REL(shmtx_rd_pri, 2thread_1pct_write, 2, 0.01, false)
+BENCH_REL(shmtx_r_bare, 2thread_1pct_write, 2, 0.01, false)
+BENCH_REL(folly_ticket, 2thread_1pct_write, 2, 0.01, false)
+BENCH_REL(boost_shared, 2thread_1pct_write, 2, 0.01, false)
+BENCH_REL(pthrd_rwlock, 2thread_1pct_write, 2, 0.01, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 4thread_1pct_write, 4, 0.01, false)
-BENCH_REL (shmtx_wr_pri, 4thread_1pct_write, 4, 0.01, false)
-BENCH_REL (shmtx_w_bare, 4thread_1pct_write, 4, 0.01, false)
-BENCH_REL (shmtx_rd_pri, 4thread_1pct_write, 4, 0.01, false)
-BENCH_REL (shmtx_r_bare, 4thread_1pct_write, 4, 0.01, false)
-BENCH_REL (folly_ticket, 4thread_1pct_write, 4, 0.01, false)
-BENCH_REL (boost_shared, 4thread_1pct_write, 4, 0.01, false)
-BENCH_REL (pthrd_rwlock, 4thread_1pct_write, 4, 0.01, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 4thread_1pct_write, 4, 0.01, false)
+BENCH_REL(shmtx_w_bare, 4thread_1pct_write, 4, 0.01, false)
+BENCH_REL(shmtx_rd_pri, 4thread_1pct_write, 4, 0.01, false)
+BENCH_REL(shmtx_r_bare, 4thread_1pct_write, 4, 0.01, false)
+BENCH_REL(folly_ticket, 4thread_1pct_write, 4, 0.01, false)
+BENCH_REL(boost_shared, 4thread_1pct_write, 4, 0.01, false)
+BENCH_REL(pthrd_rwlock, 4thread_1pct_write, 4, 0.01, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 8thread_1pct_write, 8, 0.01, false)
-BENCH_REL (shmtx_wr_pri, 8thread_1pct_write, 8, 0.01, false)
-BENCH_REL (shmtx_w_bare, 8thread_1pct_write, 8, 0.01, false)
-BENCH_REL (shmtx_rd_pri, 8thread_1pct_write, 8, 0.01, false)
-BENCH_REL (shmtx_r_bare, 8thread_1pct_write, 8, 0.01, false)
-BENCH_REL (folly_ticket, 8thread_1pct_write, 8, 0.01, false)
-BENCH_REL (boost_shared, 8thread_1pct_write, 8, 0.01, false)
-BENCH_REL (pthrd_rwlock, 8thread_1pct_write, 8, 0.01, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 8thread_1pct_write, 8, 0.01, false)
+BENCH_REL(shmtx_w_bare, 8thread_1pct_write, 8, 0.01, false)
+BENCH_REL(shmtx_rd_pri, 8thread_1pct_write, 8, 0.01, false)
+BENCH_REL(shmtx_r_bare, 8thread_1pct_write, 8, 0.01, false)
+BENCH_REL(folly_ticket, 8thread_1pct_write, 8, 0.01, false)
+BENCH_REL(boost_shared, 8thread_1pct_write, 8, 0.01, false)
+BENCH_REL(pthrd_rwlock, 8thread_1pct_write, 8, 0.01, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 16thread_1pct_write, 16, 0.01, false)
-BENCH_REL (shmtx_wr_pri, 16thread_1pct_write, 16, 0.01, false)
-BENCH_REL (shmtx_w_bare, 16thread_1pct_write, 16, 0.01, false)
-BENCH_REL (shmtx_rd_pri, 16thread_1pct_write, 16, 0.01, false)
-BENCH_REL (shmtx_r_bare, 16thread_1pct_write, 16, 0.01, false)
-BENCH_REL (folly_ticket, 16thread_1pct_write, 16, 0.01, false)
-BENCH_REL (boost_shared, 16thread_1pct_write, 16, 0.01, false)
-BENCH_REL (pthrd_rwlock, 16thread_1pct_write, 16, 0.01, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 16thread_1pct_write, 16, 0.01, false)
+BENCH_REL(shmtx_w_bare, 16thread_1pct_write, 16, 0.01, false)
+BENCH_REL(shmtx_rd_pri, 16thread_1pct_write, 16, 0.01, false)
+BENCH_REL(shmtx_r_bare, 16thread_1pct_write, 16, 0.01, false)
+BENCH_REL(folly_ticket, 16thread_1pct_write, 16, 0.01, false)
+BENCH_REL(boost_shared, 16thread_1pct_write, 16, 0.01, false)
+BENCH_REL(pthrd_rwlock, 16thread_1pct_write, 16, 0.01, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 32thread_1pct_write, 32, 0.01, false)
-BENCH_REL (shmtx_wr_pri, 32thread_1pct_write, 32, 0.01, false)
-BENCH_REL (shmtx_w_bare, 32thread_1pct_write, 32, 0.01, false)
-BENCH_REL (shmtx_rd_pri, 32thread_1pct_write, 32, 0.01, false)
-BENCH_REL (shmtx_r_bare, 32thread_1pct_write, 32, 0.01, false)
-BENCH_REL (folly_ticket, 32thread_1pct_write, 32, 0.01, false)
-BENCH_REL (boost_shared, 32thread_1pct_write, 32, 0.01, false)
-BENCH_REL (pthrd_rwlock, 32thread_1pct_write, 32, 0.01, false)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 32thread_1pct_write, 32, 0.01, false)
+BENCH_REL(shmtx_w_bare, 32thread_1pct_write, 32, 0.01, false)
+BENCH_REL(shmtx_rd_pri, 32thread_1pct_write, 32, 0.01, false)
+BENCH_REL(shmtx_r_bare, 32thread_1pct_write, 32, 0.01, false)
+BENCH_REL(folly_ticket, 32thread_1pct_write, 32, 0.01, false)
+BENCH_REL(boost_shared, 32thread_1pct_write, 32, 0.01, false)
+BENCH_REL(pthrd_rwlock, 32thread_1pct_write, 32, 0.01, false)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 64thread_1pct_write, 64, 0.01, false)
-BENCH_REL (shmtx_wr_pri, 64thread_1pct_write, 64, 0.01, false)
-BENCH_REL (shmtx_w_bare, 64thread_1pct_write, 64, 0.01, false)
-BENCH_REL (shmtx_rd_pri, 64thread_1pct_write, 64, 0.01, false)
-BENCH_REL (shmtx_r_bare, 64thread_1pct_write, 64, 0.01, false)
-BENCH_REL (folly_ticket, 64thread_1pct_write, 64, 0.01, false)
-BENCH_REL (boost_shared, 64thread_1pct_write, 64, 0.01, false)
-BENCH_REL (pthrd_rwlock, 64thread_1pct_write, 64, 0.01, false)
+BENCH_REL(shmtx_wr_pri, 64thread_1pct_write, 64, 0.01, false)
+BENCH_REL(shmtx_w_bare, 64thread_1pct_write, 64, 0.01, false)
+BENCH_REL(shmtx_rd_pri, 64thread_1pct_write, 64, 0.01, false)
+BENCH_REL(shmtx_r_bare, 64thread_1pct_write, 64, 0.01, false)
+BENCH_REL(folly_ticket, 64thread_1pct_write, 64, 0.01, false)
+BENCH_REL(boost_shared, 64thread_1pct_write, 64, 0.01, false)
+BENCH_REL(pthrd_rwlock, 64thread_1pct_write, 64, 0.01, false)
 
 // Worst case scenario for deferred locks. No actual sharing, likely that
 // read operations will have to first set the kDeferredReadersPossibleBit,
 // and likely that writers will have to scan deferredReaders[].
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 2thr_2lock_50pct_write, 2, 0.50, true)
-BENCH_REL (shmtx_wr_pri, 2thr_2lock_50pct_write, 2, 0.50, true)
-BENCH_REL (shmtx_rd_pri, 2thr_2lock_50pct_write, 2, 0.50, true)
+BENCH_REL(shmtx_wr_pri, 2thr_2lock_50pct_write, 2, 0.50, true)
+BENCH_REL(shmtx_rd_pri, 2thr_2lock_50pct_write, 2, 0.50, true)
 BENCH_BASE(folly_rwspin, 4thr_4lock_50pct_write, 4, 0.50, true)
-BENCH_REL (shmtx_wr_pri, 4thr_4lock_50pct_write, 4, 0.50, true)
-BENCH_REL (shmtx_rd_pri, 4thr_4lock_50pct_write, 4, 0.50, true)
+BENCH_REL(shmtx_wr_pri, 4thr_4lock_50pct_write, 4, 0.50, true)
+BENCH_REL(shmtx_rd_pri, 4thr_4lock_50pct_write, 4, 0.50, true)
 BENCH_BASE(folly_rwspin, 8thr_8lock_50pct_write, 8, 0.50, true)
-BENCH_REL (shmtx_wr_pri, 8thr_8lock_50pct_write, 8, 0.50, true)
-BENCH_REL (shmtx_rd_pri, 8thr_8lock_50pct_write, 8, 0.50, true)
+BENCH_REL(shmtx_wr_pri, 8thr_8lock_50pct_write, 8, 0.50, true)
+BENCH_REL(shmtx_rd_pri, 8thr_8lock_50pct_write, 8, 0.50, true)
 BENCH_BASE(folly_rwspin, 16thr_16lock_50pct_write, 16, 0.50, true)
-BENCH_REL (shmtx_wr_pri, 16thr_16lock_50pct_write, 16, 0.50, true)
-BENCH_REL (shmtx_rd_pri, 16thr_16lock_50pct_write, 16, 0.50, true)
+BENCH_REL(shmtx_wr_pri, 16thr_16lock_50pct_write, 16, 0.50, true)
+BENCH_REL(shmtx_rd_pri, 16thr_16lock_50pct_write, 16, 0.50, true)
 BENCH_BASE(folly_rwspin, 32thr_32lock_50pct_write, 32, 0.50, true)
-BENCH_REL (shmtx_wr_pri, 32thr_32lock_50pct_write, 32, 0.50, true)
-BENCH_REL (shmtx_rd_pri, 32thr_32lock_50pct_write, 32, 0.50, true)
+BENCH_REL(shmtx_wr_pri, 32thr_32lock_50pct_write, 32, 0.50, true)
+BENCH_REL(shmtx_rd_pri, 32thr_32lock_50pct_write, 32, 0.50, true)
 BENCH_BASE(folly_rwspin, 64thr_64lock_50pct_write, 64, 0.50, true)
-BENCH_REL (shmtx_wr_pri, 64thr_64lock_50pct_write, 64, 0.50, true)
-BENCH_REL (shmtx_rd_pri, 64thr_64lock_50pct_write, 64, 0.50, true)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 64thr_64lock_50pct_write, 64, 0.50, true)
+BENCH_REL(shmtx_rd_pri, 64thr_64lock_50pct_write, 64, 0.50, true)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 2thr_2lock_10pct_write, 2, 0.10, true)
-BENCH_REL (shmtx_wr_pri, 2thr_2lock_10pct_write, 2, 0.10, true)
-BENCH_REL (shmtx_rd_pri, 2thr_2lock_10pct_write, 2, 0.10, true)
+BENCH_REL(shmtx_wr_pri, 2thr_2lock_10pct_write, 2, 0.10, true)
+BENCH_REL(shmtx_rd_pri, 2thr_2lock_10pct_write, 2, 0.10, true)
 BENCH_BASE(folly_rwspin, 4thr_4lock_10pct_write, 4, 0.10, true)
-BENCH_REL (shmtx_wr_pri, 4thr_4lock_10pct_write, 4, 0.10, true)
-BENCH_REL (shmtx_rd_pri, 4thr_4lock_10pct_write, 4, 0.10, true)
+BENCH_REL(shmtx_wr_pri, 4thr_4lock_10pct_write, 4, 0.10, true)
+BENCH_REL(shmtx_rd_pri, 4thr_4lock_10pct_write, 4, 0.10, true)
 BENCH_BASE(folly_rwspin, 8thr_8lock_10pct_write, 8, 0.10, true)
-BENCH_REL (shmtx_wr_pri, 8thr_8lock_10pct_write, 8, 0.10, true)
-BENCH_REL (shmtx_rd_pri, 8thr_8lock_10pct_write, 8, 0.10, true)
+BENCH_REL(shmtx_wr_pri, 8thr_8lock_10pct_write, 8, 0.10, true)
+BENCH_REL(shmtx_rd_pri, 8thr_8lock_10pct_write, 8, 0.10, true)
 BENCH_BASE(folly_rwspin, 16thr_16lock_10pct_write, 16, 0.10, true)
-BENCH_REL (shmtx_wr_pri, 16thr_16lock_10pct_write, 16, 0.10, true)
-BENCH_REL (shmtx_rd_pri, 16thr_16lock_10pct_write, 16, 0.10, true)
+BENCH_REL(shmtx_wr_pri, 16thr_16lock_10pct_write, 16, 0.10, true)
+BENCH_REL(shmtx_rd_pri, 16thr_16lock_10pct_write, 16, 0.10, true)
 BENCH_BASE(folly_rwspin, 32thr_32lock_10pct_write, 32, 0.10, true)
-BENCH_REL (shmtx_wr_pri, 32thr_32lock_10pct_write, 32, 0.10, true)
-BENCH_REL (shmtx_rd_pri, 32thr_32lock_10pct_write, 32, 0.10, true)
+BENCH_REL(shmtx_wr_pri, 32thr_32lock_10pct_write, 32, 0.10, true)
+BENCH_REL(shmtx_rd_pri, 32thr_32lock_10pct_write, 32, 0.10, true)
 BENCH_BASE(folly_rwspin, 64thr_64lock_10pct_write, 64, 0.10, true)
-BENCH_REL (shmtx_wr_pri, 64thr_64lock_10pct_write, 64, 0.10, true)
-BENCH_REL (shmtx_rd_pri, 64thr_64lock_10pct_write, 64, 0.10, true)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_wr_pri, 64thr_64lock_10pct_write, 64, 0.10, true)
+BENCH_REL(shmtx_rd_pri, 64thr_64lock_10pct_write, 64, 0.10, true)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin, 2thr_2lock_1pct_write, 2, 0.01, true)
-BENCH_REL (shmtx_wr_pri, 2thr_2lock_1pct_write, 2, 0.01, true)
-BENCH_REL (shmtx_rd_pri, 2thr_2lock_1pct_write, 2, 0.01, true)
+BENCH_REL(shmtx_wr_pri, 2thr_2lock_1pct_write, 2, 0.01, true)
+BENCH_REL(shmtx_rd_pri, 2thr_2lock_1pct_write, 2, 0.01, true)
 BENCH_BASE(folly_rwspin, 4thr_4lock_1pct_write, 4, 0.01, true)
-BENCH_REL (shmtx_wr_pri, 4thr_4lock_1pct_write, 4, 0.01, true)
-BENCH_REL (shmtx_rd_pri, 4thr_4lock_1pct_write, 4, 0.01, true)
+BENCH_REL(shmtx_wr_pri, 4thr_4lock_1pct_write, 4, 0.01, true)
+BENCH_REL(shmtx_rd_pri, 4thr_4lock_1pct_write, 4, 0.01, true)
 BENCH_BASE(folly_rwspin, 8thr_8lock_1pct_write, 8, 0.01, true)
-BENCH_REL (shmtx_wr_pri, 8thr_8lock_1pct_write, 8, 0.01, true)
-BENCH_REL (shmtx_rd_pri, 8thr_8lock_1pct_write, 8, 0.01, true)
+BENCH_REL(shmtx_wr_pri, 8thr_8lock_1pct_write, 8, 0.01, true)
+BENCH_REL(shmtx_rd_pri, 8thr_8lock_1pct_write, 8, 0.01, true)
 BENCH_BASE(folly_rwspin, 16thr_16lock_1pct_write, 16, 0.01, true)
-BENCH_REL (shmtx_wr_pri, 16thr_16lock_1pct_write, 16, 0.01, true)
-BENCH_REL (shmtx_rd_pri, 16thr_16lock_1pct_write, 16, 0.01, true)
+BENCH_REL(shmtx_wr_pri, 16thr_16lock_1pct_write, 16, 0.01, true)
+BENCH_REL(shmtx_rd_pri, 16thr_16lock_1pct_write, 16, 0.01, true)
 BENCH_BASE(folly_rwspin, 32thr_32lock_1pct_write, 32, 0.01, true)
-BENCH_REL (shmtx_wr_pri, 32thr_32lock_1pct_write, 32, 0.01, true)
-BENCH_REL (shmtx_rd_pri, 32thr_32lock_1pct_write, 32, 0.01, true)
+BENCH_REL(shmtx_wr_pri, 32thr_32lock_1pct_write, 32, 0.01, true)
+BENCH_REL(shmtx_rd_pri, 32thr_32lock_1pct_write, 32, 0.01, true)
 BENCH_BASE(folly_rwspin, 64thr_64lock_1pct_write, 64, 0.01, true)
-BENCH_REL (shmtx_wr_pri, 64thr_64lock_1pct_write, 64, 0.01, true)
-BENCH_REL (shmtx_rd_pri, 64thr_64lock_1pct_write, 64, 0.01, true)
+BENCH_REL(shmtx_wr_pri, 64thr_64lock_1pct_write, 64, 0.01, true)
+BENCH_REL(shmtx_rd_pri, 64thr_64lock_1pct_write, 64, 0.01, true)
 
 // Ping-pong tests have a scaled number of iterations, because their burn
 // loop would make them too slow otherwise.  Ping-pong with burn count of
@@ -1692,35 +1770,35 @@ BENCH_REL (shmtx_rd_pri, 64thr_64lock_1pct_write, 64, 0.01, true)
 // each wakeup by about 20 usec.  (Take benchmark reported difference,
 // ~400 nanos, multiply by the scale of 100, then divide by 2 because
 // each round has two wakeups.)
-BENCHMARK_DRAW_LINE()
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin_ping_pong, burn0, 1, 0)
-BENCH_REL (shmtx_w_bare_ping_pong, burn0, 1, 0)
-BENCH_REL (shmtx_r_bare_ping_pong, burn0, 1, 0)
-BENCH_REL (folly_ticket_ping_pong, burn0, 1, 0)
-BENCH_REL (boost_shared_ping_pong, burn0, 1, 0)
-BENCH_REL (pthrd_rwlock_ping_pong, burn0, 1, 0)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_w_bare_ping_pong, burn0, 1, 0)
+BENCH_REL(shmtx_r_bare_ping_pong, burn0, 1, 0)
+BENCH_REL(folly_ticket_ping_pong, burn0, 1, 0)
+BENCH_REL(boost_shared_ping_pong, burn0, 1, 0)
+BENCH_REL(pthrd_rwlock_ping_pong, burn0, 1, 0)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin_ping_pong, burn100k, 100, 100000)
-BENCH_REL (shmtx_w_bare_ping_pong, burn100k, 100, 100000)
-BENCH_REL (shmtx_r_bare_ping_pong, burn100k, 100, 100000)
-BENCH_REL (folly_ticket_ping_pong, burn100k, 100, 100000)
-BENCH_REL (boost_shared_ping_pong, burn100k, 100, 100000)
-BENCH_REL (pthrd_rwlock_ping_pong, burn100k, 100, 100000)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_w_bare_ping_pong, burn100k, 100, 100000)
+BENCH_REL(shmtx_r_bare_ping_pong, burn100k, 100, 100000)
+BENCH_REL(folly_ticket_ping_pong, burn100k, 100, 100000)
+BENCH_REL(boost_shared_ping_pong, burn100k, 100, 100000)
+BENCH_REL(pthrd_rwlock_ping_pong, burn100k, 100, 100000)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin_ping_pong, burn300k, 100, 300000)
-BENCH_REL (shmtx_w_bare_ping_pong, burn300k, 100, 300000)
-BENCH_REL (shmtx_r_bare_ping_pong, burn300k, 100, 300000)
-BENCH_REL (folly_ticket_ping_pong, burn300k, 100, 300000)
-BENCH_REL (boost_shared_ping_pong, burn300k, 100, 300000)
-BENCH_REL (pthrd_rwlock_ping_pong, burn300k, 100, 300000)
-BENCHMARK_DRAW_LINE()
+BENCH_REL(shmtx_w_bare_ping_pong, burn300k, 100, 300000)
+BENCH_REL(shmtx_r_bare_ping_pong, burn300k, 100, 300000)
+BENCH_REL(folly_ticket_ping_pong, burn300k, 100, 300000)
+BENCH_REL(boost_shared_ping_pong, burn300k, 100, 300000)
+BENCH_REL(pthrd_rwlock_ping_pong, burn300k, 100, 300000)
+BENCHMARK_DRAW_LINE();
 BENCH_BASE(folly_rwspin_ping_pong, burn1M, 1000, 1000000)
-BENCH_REL (shmtx_w_bare_ping_pong, burn1M, 1000, 1000000)
-BENCH_REL (shmtx_r_bare_ping_pong, burn1M, 1000, 1000000)
-BENCH_REL (folly_ticket_ping_pong, burn1M, 1000, 1000000)
-BENCH_REL (boost_shared_ping_pong, burn1M, 1000, 1000000)
-BENCH_REL (pthrd_rwlock_ping_pong, burn1M, 1000, 1000000)
+BENCH_REL(shmtx_w_bare_ping_pong, burn1M, 1000, 1000000)
+BENCH_REL(shmtx_r_bare_ping_pong, burn1M, 1000, 1000000)
+BENCH_REL(folly_ticket_ping_pong, burn1M, 1000, 1000000)
+BENCH_REL(boost_shared_ping_pong, burn1M, 1000, 1000000)
+BENCH_REL(pthrd_rwlock_ping_pong, burn1M, 1000, 1000000)
 
 // Reproduce with 10 minutes and
 //   sudo nice -n -20

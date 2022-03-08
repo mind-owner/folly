@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -27,9 +27,11 @@
 // solve that by pretending we have it here in the header and
 // then enable our implementation on the source side so that
 // gets linked in instead.
-#if __MACH__ &&                                                \
-    (MAC_OS_X_VERSION_MIN_REQUIRED < MAC_OS_X_VERSION_10_12 || \
-     __IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_10_0)
+#if defined(__MACH__) &&                                               \
+        ((!defined(TARGET_OS_OSX) || TARGET_OS_OSX) &&                 \
+         (MAC_OS_X_VERSION_MIN_REQUIRED >= MAC_OS_X_VERSION_10_12)) || \
+    (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE != 0 &&             \
+     (__IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_10_0))
 
 #ifdef FOLLY_HAVE_CLOCK_GETTIME
 #undef FOLLY_HAVE_CLOCK_GETTIME
@@ -66,5 +68,7 @@ char* strptime(
     const char* __restrict buf,
     const char* __restrict fmt,
     struct tm* __restrict tm);
+time_t timelocal(tm* tm);
+time_t timegm(tm* tm);
 }
 #endif

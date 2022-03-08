@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 /*
  * Author: Eric Niebler <eniebler@fb.com>
  */
@@ -29,61 +30,25 @@
 #include <typeinfo>
 #include <utility>
 
-#include <folly/Assume.h>
 #include <folly/CPortability.h>
+#include <folly/CppAttributes.h>
 #include <folly/Demangle.h>
 #include <folly/ExceptionString.h>
 #include <folly/FBString.h>
 #include <folly/Portability.h>
 #include <folly/Traits.h>
 #include <folly/Utility.h>
-
-#ifdef __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpragmas"
-#pragma GCC diagnostic ignored "-Wpotentially-evaluated-expression"
-// GCC gets confused about lambda scopes and issues shadow-local warnings for
-// parameters in totally different functions.
-FOLLY_GCC_DISABLE_NEW_SHADOW_WARNINGS
-#endif
+#include <folly/lang/Assume.h>
+#include <folly/lang/Exception.h>
 
 #define FOLLY_EXCEPTION_WRAPPER_H_INCLUDED
 
 namespace folly {
 
 #define FOLLY_REQUIRES_DEF(...) \
-  _t<std::enable_if<static_cast<bool>(__VA_ARGS__), long>>
+  std::enable_if_t<static_cast<bool>(__VA_ARGS__), long>
 
 #define FOLLY_REQUIRES(...) FOLLY_REQUIRES_DEF(__VA_ARGS__) = __LINE__
-
-namespace exception_wrapper_detail {
-
-template <template <class> class T, class... As>
-using AllOf = StrictConjunction<T<As>...>;
-
-template <bool If, class T>
-using AddConstIf = _t<std::conditional<If, const T, T>>;
-
-template <class Fn, class A>
-FOLLY_ALWAYS_INLINE FOLLY_ATTR_VISIBILITY_HIDDEN
-auto fold(Fn&&, A&& a) {
-  return static_cast<A&&>(a);
-}
-
-template <class Fn, class A, class B, class... Bs>
-FOLLY_ALWAYS_INLINE FOLLY_ATTR_VISIBILITY_HIDDEN
-auto fold(Fn&& fn, A&& a, B&& b, Bs&&... bs) {
-  return fold(
-      // This looks like a use of fn after a move of fn, but in reality, this is
-      // just a cast and not a move. That's because regardless of which fold
-      // overload is selected, fn gets bound to a &&. Had fold taken fn by value
-      // there would indeed be a problem here.
-      static_cast<Fn&&>(fn),
-      static_cast<Fn&&>(fn)(static_cast<A&&>(a), static_cast<B&&>(b)),
-      static_cast<Bs&&>(bs)...);
-}
-
-} // namespace exception_wrapper_detail
 
 //! Throwing exceptions can be a convenient way to handle errors. Storing
 //! exceptions in an `exception_ptr` makes it easy to handle exceptions in a
@@ -111,7 +76,7 @@ auto fold(Fn&& fn, A&& a, B&& b, Bs&&... bs) {
 //! convenience and high performance use cases. `make_exception_wrapper` is
 //! templated on derived type, allowing us to rethrow the exception properly for
 //! users that prefer convenience. These explicitly named exception types can
-//! therefore be handled without any peformance penalty. `exception_wrapper` is
+//! therefore be handled without any performance penalty. `exception_wrapper` is
 //! also flexible enough to accept any type. If a caught exception is not of an
 //! explicitly named type, then `std::exception_ptr` is used to preserve the
 //! exception state. For performance sensitive applications, the accessor
@@ -119,7 +84,6 @@ auto fold(Fn&& fn, A&& a, B&& b, Bs&&... bs) {
 //! little overhead.
 //!
 //! \par Example usage:
-//! \par
 //! \code
 //! exception_wrapper globalExceptionWrapper;
 //!
@@ -162,7 +126,7 @@ auto fold(Fn&& fn, A&& a, B&& b, Bs&&... bs) {
 //! \endcode
 class exception_wrapper final {
  private:
-  struct AnyException : std::exception {
+  struct FOLLY_EXPORT AnyException : std::exception {
     std::type_info const* typeinfo_;
     template <class T>
     /* implicit */ AnyException(T&& t) noexcept : typeinfo_(&typeid(t)) {}
@@ -173,16 +137,16 @@ class exception_wrapper final {
   template <class Fn>
   using arg_type = _t<arg_type_<Fn>>;
 
+  struct with_exception_from_fn_;
+  struct with_exception_from_ex_;
+
   // exception_wrapper is implemented as a simple variant over four
   // different representations:
   //  0. Empty, no exception.
   //  1. An small object stored in-situ.
   //  2. A larger object stored on the heap and referenced with a
   //     std::shared_ptr.
-  //  3. A std::exception_ptr, together with either:
-  //       a. A pointer to the referenced std::exception object, or
-  //       b. A pointer to a std::type_info object for the referenced exception,
-  //          or for an unspecified type if the type is unknown.
+  //  3. A std::exception_ptr.
   // This is accomplished with the help of a union and a pointer to a hand-
   // rolled virtual table. This virtual table contains pointers to functions
   // that know which field of the union is active and do the proper action.
@@ -197,7 +161,7 @@ class exception_wrapper final {
     exception_wrapper (*get_exception_ptr_)(exception_wrapper const*);
   };
 
-  [[noreturn]] static void onNoExceptionError();
+  [[noreturn]] static void onNoExceptionError(char const* name);
 
   template <class Ret, class... Args>
   static Ret noop_(Args...);
@@ -207,14 +171,10 @@ class exception_wrapper final {
   static VTable const uninit_;
 
   template <class Ex>
-  using IsStdException = std::is_base_of<std::exception, _t<std::decay<Ex>>>;
-  template <bool B, class T>
-  using AddConstIf = exception_wrapper_detail::AddConstIf<B, T>;
+  using IsStdException = std::is_base_of<std::exception, std::decay_t<Ex>>;
   template <class CatchFn>
   using IsCatchAll =
-      std::is_same<arg_type<_t<std::decay<CatchFn>>>, AnyException>;
-
-  struct Unknown {};
+      std::is_same<arg_type<std::decay_t<CatchFn>>, AnyException>;
 
   // Sadly, with the gcc-4.9 platform, std::logic_error and std::runtime_error
   // do not fit here. They also don't have noexcept copy-ctors, so the internal
@@ -222,7 +182,7 @@ class exception_wrapper final {
   // and runtime_error can be safely stored internally.
   struct Buffer {
     using Storage =
-        _t<std::aligned_storage<2 * sizeof(void*), alignof(std::exception)>>;
+        std::aligned_storage_t<2 * sizeof(void*), alignof(std::exception)>;
     Storage buff_;
 
     Buffer() : buff_{} {}
@@ -235,39 +195,29 @@ class exception_wrapper final {
     Ex const& as() const noexcept;
   };
 
-  enum class Placement { kInSitu, kOnHeap };
-  template <class T>
-  using PlacementOf = std::integral_constant<
-      Placement,
-      sizeof(T) <= sizeof(Buffer::Storage) &&
-              alignof(T) <= alignof(Buffer::Storage) &&
-              noexcept(T(std::declval<T&&>()))
-          ? Placement::kInSitu
-          : Placement::kOnHeap>;
+  struct ThrownTag {};
+  struct InSituTag {};
+  struct OnHeapTag {};
 
-  using InSituTag = std::integral_constant<Placement, Placement::kInSitu>;
-  using OnHeapTag = std::integral_constant<Placement, Placement::kOnHeap>;
+  template <class T>
+  using PlacementOf = std::conditional_t<
+      !IsStdException<T>::value,
+      ThrownTag,
+      std::conditional_t<
+          sizeof(T) <= sizeof(Buffer::Storage) &&
+              alignof(T) <=
+                  alignof(Buffer::Storage)&& noexcept(
+                      T(std::declval<
+                          T&&>()))&& noexcept(T(std::declval<T const&>())),
+          InSituTag,
+          OnHeapTag>>;
 
   static std::exception const* as_exception_or_null_(std::exception const& ex);
   static std::exception const* as_exception_or_null_(AnyException);
 
   struct ExceptionPtr {
     std::exception_ptr ptr_;
-    std::uintptr_t exception_or_type_; // odd for type_info
-    static_assert(
-        1 < alignof(std::exception) && 1 < alignof(std::type_info),
-        "Surprise! std::exception and std::type_info don't have alignment "
-        "greater than one. as_int_ below will not work!");
 
-    static std::uintptr_t as_int_(
-        std::exception_ptr const& ptr,
-        std::exception const& e);
-    static std::uintptr_t as_int_(
-        std::exception_ptr const& ptr,
-        AnyException e);
-    bool has_exception_() const;
-    std::exception const* as_exception_() const;
-    std::type_info const* as_type_() const;
     static void copy_(exception_wrapper const* from, exception_wrapper* to);
     static void move_(exception_wrapper* from, exception_wrapper* to);
     static void delete_(exception_wrapper* that);
@@ -280,6 +230,7 @@ class exception_wrapper final {
 
   template <class Ex>
   struct InPlace {
+    static_assert(IsStdException<Ex>::value, "only deriving std::exception");
     static void copy_(exception_wrapper const* from, exception_wrapper* to);
     static void move_(exception_wrapper* from, exception_wrapper* to);
     static void delete_(exception_wrapper* that);
@@ -287,19 +238,20 @@ class exception_wrapper final {
     static std::type_info const* type_(exception_wrapper const*);
     static std::exception const* get_exception_(exception_wrapper const* that);
     static exception_wrapper get_exception_ptr_(exception_wrapper const* that);
-    static constexpr VTable const ops_{copy_,
-                                       move_,
-                                       delete_,
-                                       throw_,
-                                       type_,
-                                       get_exception_,
-                                       get_exception_ptr_};
+    static constexpr VTable const ops_{
+        copy_,
+        move_,
+        delete_,
+        throw_,
+        type_,
+        get_exception_,
+        get_exception_ptr_};
   };
 
   struct SharedPtr {
     struct Base {
       std::type_info const* info_;
-      Base() = default;
+      Base() = delete;
       explicit Base(std::type_info const& info) : info_(&info) {}
       virtual ~Base() {}
       virtual void throw_() const = 0;
@@ -308,12 +260,15 @@ class exception_wrapper final {
     };
     template <class Ex>
     struct Impl final : public Base {
+      static_assert(IsStdException<Ex>::value, "only deriving std::exception");
       Ex ex_;
-      Impl() = default;
+      Impl() : Base{typeid(Ex)}, ex_() {}
+      // clang-format off
       template <typename... As>
       explicit Impl(As&&... as)
           : Base{typeid(Ex)}, ex_(std::forward<As>(as)...) {}
       [[noreturn]] void throw_() const override;
+      // clang-format on
       std::exception const* get_exception_() const noexcept override;
       exception_wrapper get_exception_ptr_() const noexcept override;
     };
@@ -337,6 +292,9 @@ class exception_wrapper final {
   VTable const* vptr_{&uninit_};
 
   template <class Ex, typename... As>
+  exception_wrapper(ThrownTag, in_place_type_t<Ex>, As&&... as);
+
+  template <class Ex, typename... As>
   exception_wrapper(OnHeapTag, in_place_type_t<Ex>, As&&... as);
 
   template <class Ex, typename... As>
@@ -349,25 +307,24 @@ class exception_wrapper final {
             Negation<std::is_base_of<exception_wrapper, T>>,
             Negation<std::is_abstract<T>>> {};
 
-  template <class CatchFn, bool IsConst = false>
-  struct ExceptionTypeOf;
+  template <class This, class Fn>
+  static bool with_exception_(This& this_, Fn fn_, tag_t<AnyException>);
 
-  template <bool IsConst>
-  struct HandleReduce;
-
-  template <bool IsConst>
-  struct HandleStdExceptReduce;
-
-  template <class This, class... CatchFns>
-  static void handle_(std::false_type, This& this_, CatchFns&... fns);
-
-  template <class This, class... CatchFns>
-  static void handle_(std::true_type, This& this_, CatchFns&... fns);
+  template <class This, class Fn, typename Ex>
+  static bool with_exception_(This& this_, Fn fn_, tag_t<Ex>);
 
   template <class Ex, class This, class Fn>
   static bool with_exception_(This& this_, Fn fn_);
 
+  template <class This, class... CatchFns>
+  static void handle_(This& this_, char const* name, CatchFns&... fns);
+
  public:
+  static exception_wrapper from_exception_ptr(
+      std::exception_ptr const& eptr) noexcept;
+  static exception_wrapper from_exception_ptr(
+      std::exception_ptr&& eptr) noexcept;
+
   //! Default-constructs an empty `exception_wrapper`
   //! \post `type() == none()`
   exception_wrapper() noexcept {}
@@ -380,7 +337,7 @@ class exception_wrapper final {
   //! Copy-constructs an `exception_wrapper`
   //! \post `*this` contains a copy of `that`, and `that` is unmodified
   //! \post `type() == that.type()`
-  exception_wrapper(exception_wrapper const& that);
+  exception_wrapper(exception_wrapper const& that) noexcept;
 
   //! Move-assigns an `exception_wrapper`
   //! \pre `this != &that`
@@ -391,47 +348,43 @@ class exception_wrapper final {
   //! Copy-assigns an `exception_wrapper`
   //! \post `*this` contains a copy of `that`, and `that` is unmodified
   //! \post `type() == that.type()`
-  exception_wrapper& operator=(exception_wrapper const& that);
+  exception_wrapper& operator=(exception_wrapper const& that) noexcept;
 
   ~exception_wrapper();
 
-  //! \pre `ptr` is empty, or it holds a reference to an exception that is not
-  //!     derived from `std::exception`.
   //! \post `!ptr || bool(*this)`
-  //! \post `hasThrownException() == true`
-  //! \post `type() == unknown()`
-  explicit exception_wrapper(std::exception_ptr ptr) noexcept;
+  explicit exception_wrapper(std::exception_ptr const& ptr) noexcept;
+  explicit exception_wrapper(std::exception_ptr&& ptr) noexcept;
 
   //! \pre `ptr` holds a reference to `ex`.
-  //! \post `hasThrownException() == true`
   //! \post `bool(*this)`
   //! \post `type() == typeid(ex)`
   template <class Ex>
-  exception_wrapper(std::exception_ptr ptr, Ex& ex);
+  exception_wrapper(std::exception_ptr const& ptr, Ex& ex) noexcept;
+  template <class Ex>
+  exception_wrapper(std::exception_ptr&& ptr, Ex& ex) noexcept;
 
   //! \pre `typeid(ex) == typeid(typename decay<Ex>::type)`
   //! \post `bool(*this)`
-  //! \post `hasThrownException() == false`
   //! \post `type() == typeid(ex)`
   //! \note Exceptions of types derived from `std::exception` can be implicitly
   //!     converted to an `exception_wrapper`.
   template <
       class Ex,
-      class Ex_ = _t<std::decay<Ex>>,
+      class Ex_ = std::decay_t<Ex>,
       FOLLY_REQUIRES(
           Conjunction<IsStdException<Ex_>, IsRegularExceptionType<Ex_>>::value)>
   /* implicit */ exception_wrapper(Ex&& ex);
 
   //! \pre `typeid(ex) == typeid(typename decay<Ex>::type)`
   //! \post `bool(*this)`
-  //! \post `hasThrownException() == false`
   //! \post `type() == typeid(ex)`
   //! \note Exceptions of types not derived from `std::exception` can still be
   //!     used to construct an `exception_wrapper`, but you must specify
   //!     `folly::in_place` as the first parameter.
   template <
       class Ex,
-      class Ex_ = _t<std::decay<Ex>>,
+      class Ex_ = std::decay_t<Ex>,
       FOLLY_REQUIRES(IsRegularExceptionType<Ex_>::value)>
   exception_wrapper(in_place_t, Ex&& ex);
 
@@ -444,7 +397,7 @@ class exception_wrapper final {
   //! Swaps the value of `*this` with the value of `that`
   void swap(exception_wrapper& that) noexcept;
 
-  //! \return `true` if `*this` is not holding an exception.
+  //! \return `true` if `*this` is holding an exception.
   explicit operator bool() const noexcept;
 
   //! \return `!bool(*this)`
@@ -486,30 +439,23 @@ class exception_wrapper final {
   //! \note The non-const overload of this function mutates `*this` to cache the
   //!     computed `std::exception_ptr`; that is, this function may cause
   //!     `has_exception_ptr()` to change from `false` to `true`.
-  std::exception_ptr const& to_exception_ptr() noexcept;
+  std::exception_ptr to_exception_ptr() noexcept;
   //! \overload
   std::exception_ptr to_exception_ptr() const noexcept;
 
   //! \return the `typeid` of an unspecified type used by
   //!     `exception_wrapper::type()` to denote an empty `exception_wrapper`.
   static std::type_info const& none() noexcept;
-  //! \return the `typeid` of an unspecified type used by
-  //!     `exception_wrapper::type()` to denote an `exception_wrapper` that
-  //!     holds an exception of unknown type.
-  static std::type_info const& unknown() noexcept;
 
   //! Returns the `typeid` of the wrapped exception object. If there is no
-  //!     wrapped exception object, returns `exception_wrapper::none()`. If
-  //!     this instance wraps an exception of unknown type not derived from
-  //!     `std::exception`, returns `exception_wrapper::unknown()`.
+  //!     wrapped exception object, returns `exception_wrapper::none()`.
   std::type_info const& type() const noexcept;
 
   //! \return If `get_exception() != nullptr`, `class_name() + ": " +
   //!     get_exception()->what()`; otherwise, `class_name()`.
   folly::fbstring what() const;
 
-  //! \return If `!*this`, the empty string; otherwise, if
-  //!     `type() == unknown()`, the string `"<unknown exception>"`; otherwise,
+  //! \return If `!*this`, the empty string; otherwise,
   //!     the result of `type().name()` after demangling.
   folly::fbstring class_name() const;
 
@@ -520,9 +466,19 @@ class exception_wrapper final {
   template <class Ex>
   bool is_compatible_with() const noexcept;
 
-  //! \pre `bool(*this)`
   //! Throws the wrapped expression.
+  //! \pre `bool(*this)`
   [[noreturn]] void throw_exception() const;
+
+  //! Terminates the process with the wrapped expression.
+  [[noreturn]] void terminate_with() const noexcept { throw_exception(); }
+
+  //! Throws the wrapped expression nested into another exception.
+  //! \pre `bool(*this)`
+  //! \param ex Exception in *this will be thrown nested into ex;
+  //      see std::throw_with_nested() for details on this semantic.
+  template <class Ex>
+  [[noreturn]] void throw_with_nested(Ex&& ex) const;
 
   //! Call `fn` with the wrapped exception (if any), if `fn` can accept it.
   //! \par Example
@@ -544,7 +500,7 @@ class exception_wrapper final {
   //! \code
   //! ew.with_exception<std::runtime_error>([](auto&& e) { /*...*/; });
   //! \endcode
-  //! \note The handler may or may not be invoked with an active exception.
+  //! \note The handler is not invoked with an active exception.
   //!     **Do not try to rethrow the exception with `throw;` from within your
   //!     handler -- that is, a throw expression with no operand.** This may
   //!     cause your process to terminate. (It is perfectly ok to throw from
@@ -575,15 +531,15 @@ class exception_wrapper final {
   //! \endcode
   //! In the above example, any exception _not_ derived from `std::exception`
   //!     will be propagated. To specify a catch-all clause, pass a lambda that
-  //!     takes a C-style elipses, as in:
+  //!     takes a C-style ellipses, as in:
   //! \code
   //! ew.handle(/*...* /, [](...) { /* handle unknown exception */ } )
   //! \endcode
   //! \pre `!*this`
-  //! \tparam CatchFns... A pack of unary monomorphic function object types.
+  //! \tparam CatchFns A pack of unary monomorphic function object types.
   //! \param fns A pack of unary monomorphic function objects to be treated as
   //!     an ordered list of potential exception handlers.
-  //! \note The handlers may or may not be invoked with an active exception.
+  //! \note The handlers are not invoked with an active exception.
   //!     **Do not try to rethrow the exception with `throw;` from within your
   //!     handler -- that is, a throw expression with no operand.** This may
   //!     cause your process to terminate. (It is perfectly ok to throw from
@@ -614,8 +570,7 @@ exception_wrapper make_exception_wrapper(As&&... as) {
  */
 template <class Ch>
 std::basic_ostream<Ch>& operator<<(
-    std::basic_ostream<Ch>& sout,
-    exception_wrapper const& ew) {
+    std::basic_ostream<Ch>& sout, exception_wrapper const& ew) {
   return sout << ew.what();
 }
 
@@ -629,67 +584,16 @@ inline void swap(exception_wrapper& a, exception_wrapper& b) noexcept {
 // For consistency with exceptionStr() functions in ExceptionString.h
 fbstring exceptionStr(exception_wrapper const& ew);
 
-namespace detail {
+//! `try_and_catch` is a convenience for `try {} catch(...) {}`` that returns an
+//! `exception_wrapper` with the thrown exception, if any.
 template <typename F>
-inline exception_wrapper try_and_catch_(F&& f) {
-  return (f(), exception_wrapper());
+exception_wrapper try_and_catch(F&& fn) noexcept {
+  auto x = [&] { return void(static_cast<F&&>(fn)()), std::exception_ptr{}; };
+  return exception_wrapper{catch_exception(x, std::current_exception)};
 }
-
-template <typename F, typename Ex, typename... Exs>
-inline exception_wrapper try_and_catch_(F&& f) {
-  try {
-    return try_and_catch_<F, Exs...>(std::forward<F>(f));
-  } catch (Ex& ex) {
-    return exception_wrapper(std::current_exception(), ex);
-  }
-}
-} // detail
-
-//! `try_and_catch` is a simple replacement for `try {} catch(){}`` that allows
-//! you to specify which derived exceptions you would like to catch and store in
-//! an `exception_wrapper`.
-//!
-//! Because we cannot build an equivalent of `std::current_exception()`, we need
-//! to catch every derived exception that we are interested in catching.
-//!
-//! Exceptions should be listed in the reverse order that you would write your
-//! catch statements (that is, `std::exception&` should be first).
-//!
-//! \par Example Usage:
-//! \code
-//! // This catches my runtime_error and if I call throw_exception() on ew, it
-//! // will throw a runtime_error
-//! auto ew = folly::try_and_catch<std::exception, std::runtime_error>([=]() {
-//!   if (badThingHappens()) {
-//!     throw std::runtime_error("ZOMG!");
-//!   }
-//! });
-//!
-//! // This will catch the exception and if I call throw_exception() on ew, it
-//! // will throw a std::exception
-//! auto ew = folly::try_and_catch<std::exception, std::runtime_error>([=]() {
-//!   if (badThingHappens()) {
-//!     throw std::exception();
-//!   }
-//! });
-//!
-//! // This will not catch the exception and it will be thrown.
-//! auto ew = folly::try_and_catch<std::runtime_error>([=]() {
-//!   if (badThingHappens()) {
-//!     throw std::exception();
-//!   }
-//! });
-//! \endcode
-template <typename... Exceptions, typename F>
-exception_wrapper try_and_catch(F&& fn) {
-  return detail::try_and_catch_<F, Exceptions...>(std::forward<F>(fn));
-}
-} // folly
+} // namespace folly
 
 #include <folly/ExceptionWrapper-inl.h>
 
 #undef FOLLY_REQUIRES
 #undef FOLLY_REQUIRES_DEF
-#ifdef __GNUC__
-#pragma GCC diagnostic pop
-#endif

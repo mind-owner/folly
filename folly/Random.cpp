@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,22 +16,29 @@
 
 #include <folly/Random.h>
 
-#include <atomic>
+#include <array>
 #include <mutex>
 #include <random>
-#include <array>
 
-#include <folly/CallOnce.h>
-#include <folly/File.h>
-#include <folly/FileUtil.h>
+#include <folly/CppAttributes.h>
 #include <folly/SingletonThreadLocal.h>
 #include <folly/ThreadLocal.h>
+#include <folly/detail/FileUtilDetail.h>
+#include <folly/portability/Config.h>
 #include <folly/portability/SysTime.h>
 #include <folly/portability/Unistd.h>
+#include <folly/synchronization/RelaxedAtomic.h>
+
 #include <glog/logging.h>
 
 #ifdef _MSC_VER
-# include <wincrypt.h> // @manual
+#include <wincrypt.h> // @manual
+#else
+#include <fcntl.h>
+#endif
+
+#if FOLLY_HAVE_GETRANDOM
+#include <sys/random.h>
 #endif
 
 namespace folly {
@@ -40,33 +47,44 @@ namespace {
 
 void readRandomDevice(void* data, size_t size) {
 #ifdef _MSC_VER
-  static folly::once_flag flag;
-  static HCRYPTPROV cryptoProv;
-  folly::call_once(flag, [&] {
+  static auto const cryptoProv = [] {
+    HCRYPTPROV prov;
     if (!CryptAcquireContext(
-            &cryptoProv,
-            nullptr,
-            nullptr,
-            PROV_RSA_FULL,
-            CRYPT_VERIFYCONTEXT)) {
+            &prov, nullptr, nullptr, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT)) {
       if (GetLastError() == NTE_BAD_KEYSET) {
         // Mostly likely cause of this is that no key container
         // exists yet, so try to create one.
         PCHECK(CryptAcquireContext(
-            &cryptoProv, nullptr, nullptr, PROV_RSA_FULL, CRYPT_NEWKEYSET));
+            &prov, nullptr, nullptr, PROV_RSA_FULL, CRYPT_NEWKEYSET));
       } else {
         LOG(FATAL) << "Failed to acquire the default crypto context.";
       }
     }
-  });
+    return prov;
+  }();
   CHECK(size <= std::numeric_limits<DWORD>::max());
   PCHECK(CryptGenRandom(cryptoProv, (DWORD)size, (BYTE*)data));
 #else
-  // Keep the random device open for the duration of the program.
-  static int randomFd = ::open("/dev/urandom", O_RDONLY);
-  PCHECK(randomFd >= 0);
-  auto bytesRead = readFull(randomFd, data, size);
-  PCHECK(bytesRead >= 0 && size_t(bytesRead) == size);
+  ssize_t bytesRead = 0;
+  auto gen = [](int, void* buf, size_t buflen) {
+#if FOLLY_HAVE_GETRANDOM
+    auto flags = 0u;
+    return ::getrandom(buf, buflen, flags);
+#else
+    [](...) {}(buf, buflen);
+    errno = ENOSYS;
+    return -1;
+#endif
+  };
+  bytesRead = fileutil_detail::wrapFull(gen, -1, data, size);
+  if (bytesRead == -1 && errno == ENOSYS) {
+    // Keep the random device open for the duration of the program.
+    static int randomFd = ::open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    PCHECK(randomFd >= 0);
+    bytesRead = fileutil_detail::wrapFull(::read, randomFd, data, size);
+  }
+  PCHECK(bytesRead >= 0);
+  CHECK_EQ(size_t(bytesRead), size);
 #endif
 }
 
@@ -74,10 +92,12 @@ class BufferedRandomDevice {
  public:
   static constexpr size_t kDefaultBufferSize = 128;
 
+  static void notifyNewGlobalEpoch() { ++globalEpoch_; }
+
   explicit BufferedRandomDevice(size_t bufferSize = kDefaultBufferSize);
 
   void get(void* data, size_t size) {
-    if (LIKELY(size <= remaining())) {
+    if (LIKELY(epoch_ == globalEpoch_ && size <= remaining())) {
       memcpy(data, ptr_, size);
       ptr_ += size;
     } else {
@@ -92,18 +112,41 @@ class BufferedRandomDevice {
     return size_t(buffer_.get() + bufferSize_ - ptr_);
   }
 
+  static relaxed_atomic<size_t> globalEpoch_;
+
+  size_t epoch_{size_t(-1)}; // refill on first use
   const size_t bufferSize_;
   std::unique_ptr<unsigned char[]> buffer_;
   unsigned char* ptr_;
 };
 
+relaxed_atomic<size_t> BufferedRandomDevice::globalEpoch_{0};
+struct RandomTag {};
+
 BufferedRandomDevice::BufferedRandomDevice(size_t bufferSize)
-  : bufferSize_(bufferSize),
-    buffer_(new unsigned char[bufferSize]),
-    ptr_(buffer_.get() + bufferSize) {  // refill on first use
+    : bufferSize_(bufferSize),
+      buffer_(new unsigned char[bufferSize]),
+      ptr_(buffer_.get() + bufferSize) { // refill on first use
+  FOLLY_MAYBE_UNUSED static auto const init = [] {
+    AtFork::registerHandler(
+        nullptr,
+        /*prepare*/ []() { return true; },
+        /*parent*/ []() {},
+        /*child*/
+        []() {
+          // Ensure child and parent do not share same entropy pool.
+          BufferedRandomDevice::notifyNewGlobalEpoch();
+        });
+    return 0;
+  }();
 }
 
 void BufferedRandomDevice::getSlow(unsigned char* data, size_t size) {
+  if (epoch_ != globalEpoch_) {
+    epoch_ = globalEpoch_;
+    ptr_ = buffer_.get() + bufferSize_;
+  }
+
   DCHECK_GT(size, remaining());
   if (size >= bufferSize_) {
     // Just read directly.
@@ -124,30 +167,18 @@ void BufferedRandomDevice::getSlow(unsigned char* data, size_t size) {
   ptr_ += size;
 }
 
-struct RandomTag {};
-
 } // namespace
 
 void Random::secureRandom(void* data, size_t size) {
-  static SingletonThreadLocal<BufferedRandomDevice, RandomTag>
-      bufferedRandomDevice;
-  bufferedRandomDevice.get().get(data, size);
+  using Single = SingletonThreadLocal<BufferedRandomDevice, RandomTag>;
+  Single::get().get(data, size);
 }
 
-class ThreadLocalPRNG::LocalInstancePRNG {
- public:
-  LocalInstancePRNG() : rng(Random::create()) {}
-
-  Random::DefaultGenerator rng;
-};
-
-ThreadLocalPRNG::ThreadLocalPRNG() {
-  static SingletonThreadLocal<ThreadLocalPRNG::LocalInstancePRNG, RandomTag>
-      localInstancePRNG;
-  local_ = &localInstancePRNG.get();
+ThreadLocalPRNG::result_type ThreadLocalPRNG::operator()() {
+  struct Wrapper {
+    Random::DefaultGenerator object{Random::create()};
+  };
+  using Single = SingletonThreadLocal<Wrapper, RandomTag>;
+  return Single::get().object();
 }
-
-uint32_t ThreadLocalPRNG::getImpl(LocalInstancePRNG* local) {
-  return local->rng();
-}
-}
+} // namespace folly

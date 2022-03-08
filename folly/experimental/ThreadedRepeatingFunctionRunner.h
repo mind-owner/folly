@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,10 +16,11 @@
 
 #pragma once
 
-#include <folly/Function.h>
 #include <condition_variable>
 #include <thread>
 #include <vector>
+
+#include <folly/Function.h>
 
 namespace folly {
 
@@ -147,8 +148,7 @@ class ThreadedRepeatingFunctionRunner final {
   // Noexcept allows us to get a good backtrace on crashes -- otherwise,
   // std::terminate would get called **outside** of the thread function.
   void executeInLoop(
-      RepeatingFn,
-      std::chrono::milliseconds initialSleep) noexcept;
+      RepeatingFn, std::chrono::milliseconds initialSleep) noexcept;
 
   std::mutex stopMutex_;
   bool stopping_{false}; // protected by stopMutex_

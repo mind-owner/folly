@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,8 +23,11 @@
 #include <folly/experimental/exception_tracer/ExceptionCounterLib.h>
 #include <folly/portability/GTest.h>
 
+#if FOLLY_HAVE_ELF && FOLLY_HAVE_DWARF
+
 struct MyException {};
 
+// clang-format off
 [[noreturn]] void bar() {
   throw std::runtime_error("hello");
 }
@@ -36,6 +39,7 @@ struct MyException {};
 [[noreturn]] void baz() {
   foo();
 }
+// clang-format on
 
 using namespace folly::exception_tracer;
 
@@ -111,8 +115,8 @@ TEST(ExceptionCounter, multyThreads) {
 
   {
     std::unique_lock<std::mutex> lock(preparedMutex);
-    preparedBarrier.wait(lock,
-                         [&]() { return preparedThreads == kNumThreads; });
+    preparedBarrier.wait(
+        lock, [&]() { return preparedThreads == kNumThreads; });
   }
 
   auto stats = getExceptionStatistics();
@@ -129,3 +133,5 @@ TEST(ExceptionCounter, multyThreads) {
     t.join();
   }
 }
+
+#endif // FOLLY_HAVE_ELF && FOLLY_HAVE_DWARF

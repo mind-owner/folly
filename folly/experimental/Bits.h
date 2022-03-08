@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,18 +17,19 @@
 #pragma once
 
 #include <cstddef>
-#include <type_traits>
 #include <limits>
+#include <type_traits>
+
 #include <glog/logging.h>
 
-#include <folly/Bits.h>
 #include <folly/Portability.h>
 #include <folly/Range.h>
+#include <folly/lang/Bits.h>
 
 namespace folly {
 
 template <class T>
-struct UnalignedNoASan : public Unaligned<T> { };
+struct UnalignedNoASan : public Unaligned<T> {};
 
 // As a general rule, bit operations work on unsigned values only;
 // right-shift is arithmetic for signed values, and that can lead to
@@ -49,17 +50,16 @@ struct BitsTraits;
 // read-modify-write operation (we write back the bits we won't change);
 // silence the GCC warning in that case.
 template <class T>
-struct BitsTraits<Unaligned<T>, typename std::enable_if<
-    (std::is_integral<T>::value)>::type> {
+struct BitsTraits<
+    Unaligned<T>,
+    typename std::enable_if<(std::is_integral<T>::value)>::type> {
   typedef T UnderlyingType;
   static T load(const Unaligned<T>& x) { return x.value; }
   static void store(Unaligned<T>& x, T v) { x.value = v; }
   static T loadRMW(const Unaligned<T>& x) {
     FOLLY_PUSH_WARNING
-    FOLLY_GCC_DISABLE_WARNING("-Wuninitialized")
-#if !__clang__ // for gcc version [4.8, ?)
+    FOLLY_GNU_DISABLE_WARNING("-Wuninitialized")
     FOLLY_GCC_DISABLE_WARNING("-Wmaybe-uninitialized")
-#endif
     return x.value;
     FOLLY_POP_WARNING
   }
@@ -67,20 +67,22 @@ struct BitsTraits<Unaligned<T>, typename std::enable_if<
 
 // Special version that allows one to disable address sanitizer on demand.
 template <class T>
-struct BitsTraits<UnalignedNoASan<T>, typename std::enable_if<
-    (std::is_integral<T>::value)>::type> {
+struct BitsTraits<
+    UnalignedNoASan<T>,
+    typename std::enable_if<(std::is_integral<T>::value)>::type> {
   typedef T UnderlyingType;
-  static T FOLLY_DISABLE_ADDRESS_SANITIZER
-  load(const UnalignedNoASan<T>& x) { return x.value; }
+  static T FOLLY_DISABLE_ADDRESS_SANITIZER load(const UnalignedNoASan<T>& x) {
+    return x.value;
+  }
   static void FOLLY_DISABLE_ADDRESS_SANITIZER
-  store(UnalignedNoASan<T>& x, T v) { x.value = v; }
+  store(UnalignedNoASan<T>& x, T v) {
+    x.value = v;
+  }
   static T FOLLY_DISABLE_ADDRESS_SANITIZER
   loadRMW(const UnalignedNoASan<T>& x) {
     FOLLY_PUSH_WARNING
-    FOLLY_GCC_DISABLE_WARNING("-Wuninitialized")
-#if !__clang__ // for gcc version [4.8, ?)
+    FOLLY_GNU_DISABLE_WARNING("-Wuninitialized")
     FOLLY_GCC_DISABLE_WARNING("-Wmaybe-uninitialized")
-#endif
     return x.value;
     FOLLY_POP_WARNING
   }
@@ -88,23 +90,22 @@ struct BitsTraits<UnalignedNoASan<T>, typename std::enable_if<
 
 // Partial specialization for T, where T is unsigned integral
 template <class T>
-struct BitsTraits<T, typename std::enable_if<
-    (std::is_integral<T>::value)>::type> {
+struct BitsTraits<
+    T,
+    typename std::enable_if<(std::is_integral<T>::value)>::type> {
   typedef T UnderlyingType;
   static T load(const T& x) { return x; }
   static void store(T& x, T v) { x = v; }
   static T loadRMW(const T& x) {
     FOLLY_PUSH_WARNING
-    FOLLY_GCC_DISABLE_WARNING("-Wuninitialized")
-#if !__clang__ // for gcc version [4.8, ?)
+    FOLLY_GNU_DISABLE_WARNING("-Wuninitialized")
     FOLLY_GCC_DISABLE_WARNING("-Wmaybe-uninitialized")
-#endif
     return x;
     FOLLY_POP_WARNING
   }
 };
 
-}  // namespace detail
+} // namespace detail
 
 /**
  * Wrapper class with static methods for various bit-level operations,
@@ -112,7 +113,7 @@ struct BitsTraits<T, typename std::enable_if<
  * (T is either an unsigned integral type or Unaligned<X>, where X is
  * an unsigned integral type)
  */
-template <class T, class Traits=detail::BitsTraits<T>>
+template <class T, class Traits = detail::BitsTraits<T>>
 struct Bits {
   typedef typename Traits::UnderlyingType UnderlyingType;
   typedef T type;
@@ -127,16 +128,12 @@ struct Bits {
   /**
    * Byte index of the given bit.
    */
-  static constexpr size_t blockIndex(size_t bit) {
-    return bit / bitsPerBlock;
-  }
+  static constexpr size_t blockIndex(size_t bit) { return bit / bitsPerBlock; }
 
   /**
    * Offset in block of the given bit.
    */
-  static constexpr size_t bitOffset(size_t bit) {
-    return bit % bitsPerBlock;
-  }
+  static constexpr size_t bitOffset(size_t bit) { return bit % bitsPerBlock; }
 
   /**
    * Number of blocks used by the given number of bits.
@@ -183,8 +180,8 @@ struct Bits {
  private:
   // Same as set, assumes all bits are in the same block.
   // (bitStart < sizeof(T) * 8, bitStart + count <= sizeof(T) * 8)
-  static void innerSet(T* p, size_t bitStart, size_t count,
-                       UnderlyingType value);
+  static void innerSet(
+      T* p, size_t bitStart, size_t count, UnderlyingType value);
 
   // Same as get, assumes all bits are in the same block.
   // (bitStart < sizeof(T) * 8, bitStart + count <= sizeof(T) * 8)
@@ -201,29 +198,24 @@ struct Bits {
   }
 };
 
-// gcc 4.8 needs more -Wmaybe-uninitialized tickling, as it propagates the
-// taint upstream from loadRMW
-FOLLY_PUSH_WARNING
-FOLLY_GCC_DISABLE_WARNING("-Wuninitialized")
-#if !__clang__ // for gcc version [4.8, ?)
-FOLLY_GCC_DISABLE_WARNING("-Wmaybe-uninitialized")
-#endif
-
 template <class T, class Traits>
 inline void Bits<T, Traits>::set(T* p, size_t bit) {
+  auto mask = static_cast<UnderlyingType>(one << bitOffset(bit));
   T& block = p[blockIndex(bit)];
-  Traits::store(block, Traits::loadRMW(block) | (one << bitOffset(bit)));
+  Traits::store(block, Traits::loadRMW(block) | mask);
 }
 
 template <class T, class Traits>
 inline void Bits<T, Traits>::clear(T* p, size_t bit) {
+  auto mask = static_cast<UnderlyingType>(one << bitOffset(bit));
+  auto ksam = static_cast<UnderlyingType>(~mask);
   T& block = p[blockIndex(bit)];
-  Traits::store(block, Traits::loadRMW(block) & ~(one << bitOffset(bit)));
+  Traits::store(block, Traits::loadRMW(block) & ksam);
 }
 
 template <class T, class Traits>
-inline void Bits<T, Traits>::set(T* p, size_t bitStart, size_t count,
-                                 UnderlyingType value) {
+inline void Bits<T, Traits>::set(
+    T* p, size_t bitStart, size_t count, UnderlyingType value) {
   DCHECK_LE(count, sizeof(UnderlyingType) * 8);
   size_t cut = bitsPerBlock - count;
   if (cut != 8 * sizeof(UnderlyingType)) {
@@ -252,16 +244,14 @@ inline void Bits<T, Traits>::set(T* p, size_t bitStart, size_t count,
 }
 
 template <class T, class Traits>
-inline void Bits<T, Traits>::innerSet(T* p, size_t offset, size_t count,
-                                      UnderlyingType value) {
+inline void Bits<T, Traits>::innerSet(
+    T* p, size_t offset, size_t count, UnderlyingType value) {
   // Mask out bits and set new value
   UnderlyingType v = Traits::loadRMW(*p);
   v &= ~(ones(count) << offset);
   v |= (value << offset);
   Traits::store(*p, v);
 }
-
-FOLLY_POP_WARNING
 
 template <class T, class Traits>
 inline bool Bits<T, Traits>::test(const T* p, size_t bit) {
@@ -270,7 +260,7 @@ inline bool Bits<T, Traits>::test(const T* p, size_t bit) {
 
 template <class T, class Traits>
 inline auto Bits<T, Traits>::get(const T* p, size_t bitStart, size_t count)
-  -> UnderlyingType {
+    -> UnderlyingType {
   if (count == 0) {
     return UnderlyingType{};
   }
@@ -311,4 +301,4 @@ inline size_t Bits<T, Traits>::count(const T* begin, const T* end) {
   return n;
 }
 
-}  // namespace folly
+} // namespace folly

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,6 +21,14 @@
  */
 
 #pragma once
+
+#include <folly/Portability.h>
+
+#ifndef __has_attribute
+#define FOLLY_HAS_ATTRIBUTE(x) 0
+#else
+#define FOLLY_HAS_ATTRIBUTE(x) __has_attribute(x)
+#endif
 
 #ifndef __has_cpp_attribute
 #define FOLLY_HAS_CPP_ATTRIBUTE(x) 0
@@ -47,10 +55,34 @@
  *     FOLLY_FALLTHROUGH; // no warning: annotated fall-through
  * }
  */
-#if FOLLY_HAS_CPP_ATTRIBUTE(clang::fallthrough)
+#if FOLLY_HAS_CPP_ATTRIBUTE(fallthrough)
+#define FOLLY_FALLTHROUGH [[fallthrough]]
+#elif FOLLY_HAS_CPP_ATTRIBUTE(clang::fallthrough)
 #define FOLLY_FALLTHROUGH [[clang::fallthrough]]
+#elif FOLLY_HAS_CPP_ATTRIBUTE(gnu::fallthrough)
+#define FOLLY_FALLTHROUGH [[gnu::fallthrough]]
 #else
 #define FOLLY_FALLTHROUGH
+#endif
+
+/**
+ *  Maybe_unused indicates that a function, variable or parameter might or
+ *  might not be used, e.g.
+ *
+ *  int foo(FOLLY_MAYBE_UNUSED int x) {
+ *    #ifdef USE_X
+ *      return x;
+ *    #else
+ *      return 0;
+ *    #endif
+ *  }
+ */
+#if FOLLY_HAS_CPP_ATTRIBUTE(maybe_unused) && FOLLY_CPLUSPLUS >= 201703L
+#define FOLLY_MAYBE_UNUSED [[maybe_unused]]
+#elif FOLLY_HAS_CPP_ATTRIBUTE(gnu::unused) || __GNUC__
+#define FOLLY_MAYBE_UNUSED [[gnu::unused]]
+#else
+#define FOLLY_MAYBE_UNUSED
 #endif
 
 /**
@@ -69,9 +101,68 @@
  *   }
  *   return nullptr;
  * }
+ *
+ * Ignores Clang's -Wnullability-extension since it correctly handles the case
+ * where the extension is not present.
  */
 #if FOLLY_HAS_EXTENSION(nullability)
-#define FOLLY_NULLABLE _Nullable
+#define FOLLY_NULLABLE                                   \
+  FOLLY_PUSH_WARNING                                     \
+  FOLLY_CLANG_DISABLE_WARNING("-Wnullability-extension") \
+  _Nullable FOLLY_POP_WARNING
+#define FOLLY_NONNULL                                    \
+  FOLLY_PUSH_WARNING                                     \
+  FOLLY_CLANG_DISABLE_WARNING("-Wnullability-extension") \
+  _Nonnull FOLLY_POP_WARNING
 #else
 #define FOLLY_NULLABLE
+#define FOLLY_NONNULL
+#endif
+
+/**
+ * "Cold" indicates to the compiler that a function is only expected to be
+ * called from unlikely code paths. It can affect decisions made by the
+ * optimizer both when processing the function body and when analyzing
+ * call-sites.
+ */
+#if __GNUC__
+#define FOLLY_COLD __attribute__((__cold__))
+#else
+#define FOLLY_COLD
+#endif
+
+/**
+ *  no_unique_address indicates that a member variable can be optimized to
+ * occupy no space, rather than the minimum 1-byte used by default.
+ *
+ *  class Empty {};
+ *
+ *  class NonEmpty1 {
+ *    FOLLY_NO_UNIQUE_ADDRESS Empty e;
+ *    int f;
+ *  };
+ *
+ *  class NonEmpty2 {
+ *    Empty e;
+ *    int f;
+ *  };
+ *
+ *  sizeof(NonEmpty1); // may be == sizeof(int)
+ *  sizeof(NonEmpty2); // must be > sizeof(int)
+ */
+#if FOLLY_HAS_CPP_ATTRIBUTE(no_unique_address)
+#define FOLLY_ATTR_NO_UNIQUE_ADDRESS [[no_unique_address]]
+#else
+#define FOLLY_ATTR_NO_UNIQUE_ADDRESS
+#endif
+
+/**
+ * Accesses to objects with types with this attribute are not subjected to
+ * type-based alias analysis, but are instead assumed to be able to alias any
+ * other type of objects, just like the char type.
+ */
+#if FOLLY_HAS_CPP_ATTRIBUTE(gnu::may_alias)
+#define FOLLY_ATTR_MAY_ALIAS [[gnu::may_alias]]
+#else
+#define FOLLY_ATTR_MAY_ALIAS
 #endif

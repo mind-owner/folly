@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,37 +16,43 @@
 
 #pragma once
 
+#include <cstdint>
+#include <limits>
+
+#include <glog/logging.h>
+
+#include <folly/Portability.h>
+#include <folly/Range.h>
+#include <folly/detail/GroupVarintDetail.h>
+#include <folly/lang/Bits.h>
+#include <folly/portability/Builtins.h>
+
 #if !defined(__GNUC__) && !defined(_MSC_VER)
 #error GroupVarint.h requires GCC or MSVC
 #endif
 
-#include <folly/Portability.h>
+#if FOLLY_X64 || defined(__i386__) || FOLLY_PPC64 || FOLLY_AARCH64
+#define FOLLY_HAVE_GROUP_VARINT 1
+#else
+#define FOLLY_HAVE_GROUP_VARINT 0
+#endif
 
-#if FOLLY_X64 || defined(__i386__) || FOLLY_PPC64 || FOLLY_A64
-#define HAVE_GROUP_VARINT 1
+#if FOLLY_HAVE_GROUP_VARINT
 
-#include <cstdint>
-#include <limits>
-#include <folly/detail/GroupVarintDetail.h>
-#include <folly/Bits.h>
-#include <folly/Range.h>
-#include <folly/portability/Builtins.h>
-#include <glog/logging.h>
-
-#if FOLLY_SSE >= 3
+#if FOLLY_SSE >= 4
 #include <nmmintrin.h>
 namespace folly {
 namespace detail {
-alignas(16) extern const uint64_t groupVarintSSEMasks[];
-}  // namespace detail
-}  // namespace folly
+extern const std::array<std::array<std::uint32_t, 4>, 256> groupVarintSSEMasks;
+} // namespace detail
+} // namespace folly
 #endif
 
 namespace folly {
 namespace detail {
-extern const uint8_t groupVarintLengths[];
-}  // namespace detail
-}  // namespace folly
+extern const std::array<std::uint8_t, 256> groupVarintLengths;
+} // namespace detail
+} // namespace folly
 
 namespace folly {
 
@@ -66,7 +72,6 @@ class GroupVarint;
 template <>
 class GroupVarint<uint32_t> : public detail::GroupVarintBase<uint32_t> {
  public:
-
   /**
    * Return the number of bytes used to encode these four values.
    */
@@ -78,9 +83,7 @@ class GroupVarint<uint32_t> : public detail::GroupVarintBase<uint32_t> {
    * Return the number of bytes used to encode four uint32_t values stored
    * at consecutive positions in an array.
    */
-  static size_t size(const uint32_t* p) {
-    return size(p[0], p[1], p[2], p[3]);
-  }
+  static size_t size(const uint32_t* p) { return size(p[0], p[1], p[2], p[3]); }
 
   /**
    * Return the number of bytes used to encode count (<= 4) values.
@@ -105,13 +108,21 @@ class GroupVarint<uint32_t> : public detail::GroupVarintBase<uint32_t> {
     uint8_t v = uint8_t(*p);
     size_t s = kHeaderSize;
     s += 1 + b0key(v);
-    if (s > size) return 0;
+    if (s > size) {
+      return 0;
+    }
     s += 1 + b1key(v);
-    if (s > size) return 1;
+    if (s > size) {
+      return 1;
+    }
     s += 1 + b2key(v);
-    if (s > size) return 2;
+    if (s > size) {
+      return 2;
+    }
     s += 1 + b3key(v);
-    if (s > size) return 3;
+    if (s > size) {
+      return 3;
+    }
     return 4;
   }
 
@@ -120,9 +131,8 @@ class GroupVarint<uint32_t> : public detail::GroupVarintBase<uint32_t> {
    * return the number of bytes used by the encoding.
    */
   static size_t encodedSize(const char* p) {
-    return kHeaderSize + kGroupSize +
-           b0key(uint8_t(*p)) + b1key(uint8_t(*p)) +
-           b2key(uint8_t(*p)) + b3key(uint8_t(*p));
+    return kHeaderSize + kGroupSize + b0key(uint8_t(*p)) + b1key(uint8_t(*p)) +
+        b2key(uint8_t(*p)) + b3key(uint8_t(*p));
   }
 
   /**
@@ -137,13 +147,13 @@ class GroupVarint<uint32_t> : public detail::GroupVarintBase<uint32_t> {
     uint8_t b3key = key(d);
     *p++ = (b3key << 6) | (b2key << 4) | (b1key << 2) | b0key;
     storeUnaligned(p, a);
-    p += b0key+1;
+    p += b0key + 1;
     storeUnaligned(p, b);
-    p += b1key+1;
+    p += b1key + 1;
     storeUnaligned(p, c);
-    p += b2key+1;
+    p += b2key + 1;
     storeUnaligned(p, d);
-    p += b3key+1;
+    p += b3key + 1;
     return p;
   }
 
@@ -161,20 +171,20 @@ class GroupVarint<uint32_t> : public detail::GroupVarintBase<uint32_t> {
    * The buffer needs to have at least 3 extra bytes available (they
    * may be read but ignored).
    */
-  static const char* decode_simple(const char* p, uint32_t* a, uint32_t* b,
-                                   uint32_t* c, uint32_t* d) {
+  static const char* decode_simple(
+      const char* p, uint32_t* a, uint32_t* b, uint32_t* c, uint32_t* d) {
     size_t k = loadUnaligned<uint8_t>(p);
     const char* end = p + detail::groupVarintLengths[k];
     ++p;
     size_t k0 = b0key(k);
     *a = loadUnaligned<uint32_t>(p) & kMask[k0];
-    p += k0+1;
+    p += k0 + 1;
     size_t k1 = b1key(k);
     *b = loadUnaligned<uint32_t>(p) & kMask[k1];
-    p += k1+1;
+    p += k1 + 1;
     size_t k2 = b2key(k);
     *c = loadUnaligned<uint32_t>(p) & kMask[k2];
-    p += k2+1;
+    p += k2 + 1;
     size_t k3 = b3key(k);
     *d = loadUnaligned<uint32_t>(p) & kMask[k3];
     // p += k3+1;
@@ -186,19 +196,19 @@ class GroupVarint<uint32_t> : public detail::GroupVarintBase<uint32_t> {
    * pointed-to by dest, similar to decode(p,a,b,c,d) above.
    */
   static const char* decode_simple(const char* p, uint32_t* dest) {
-    return decode_simple(p, dest, dest+1, dest+2, dest+3);
+    return decode_simple(p, dest, dest + 1, dest + 2, dest + 3);
   }
 
-#if FOLLY_SSE >= 3
+#if FOLLY_SSE >= 4
   /**
    * Just like the non-SSSE3 decode below, but with the additional constraint
    * that we must be able to read at least 17 bytes from the input pointer, p.
    */
   static const char* decode(const char* p, uint32_t* dest) {
     uint8_t key = uint8_t(p[0]);
-    __m128i val = _mm_loadu_si128((const __m128i*)(p+1));
+    __m128i val = _mm_loadu_si128((const __m128i*)(p + 1));
     __m128i mask =
-        _mm_load_si128((const __m128i*)&detail::groupVarintSSEMasks[key * 2]);
+        _mm_load_si128((const __m128i*)detail::groupVarintSSEMasks[key].data());
     __m128i r = _mm_shuffle_epi8(val, mask);
     _mm_storeu_si128((__m128i*)dest, r);
     return p + detail::groupVarintLengths[key];
@@ -208,40 +218,32 @@ class GroupVarint<uint32_t> : public detail::GroupVarintBase<uint32_t> {
    * Just like decode_simple, but with the additional constraint that
    * we must be able to read at least 17 bytes from the input pointer, p.
    */
-  static const char* decode(const char* p, uint32_t* a, uint32_t* b,
-                            uint32_t* c, uint32_t* d) {
+  static const char* decode(
+      const char* p, uint32_t* a, uint32_t* b, uint32_t* c, uint32_t* d) {
     uint8_t key = uint8_t(p[0]);
-    __m128i val = _mm_loadu_si128((const __m128i*)(p+1));
+    __m128i val = _mm_loadu_si128((const __m128i*)(p + 1));
     __m128i mask =
-        _mm_load_si128((const __m128i*)&detail::groupVarintSSEMasks[key * 2]);
+        _mm_load_si128((const __m128i*)detail::groupVarintSSEMasks[key].data());
     __m128i r = _mm_shuffle_epi8(val, mask);
 
-    // Extracting 32 bits at a time out of an XMM register is a SSE4 feature
-#if FOLLY_SSE >= 4
     *a = uint32_t(_mm_extract_epi32(r, 0));
     *b = uint32_t(_mm_extract_epi32(r, 1));
     *c = uint32_t(_mm_extract_epi32(r, 2));
     *d = uint32_t(_mm_extract_epi32(r, 3));
-#else  /* !__SSE4__ */
-    *a = _mm_extract_epi16(r, 0) + (_mm_extract_epi16(r, 1) << 16);
-    *b = _mm_extract_epi16(r, 2) + (_mm_extract_epi16(r, 3) << 16);
-    *c = _mm_extract_epi16(r, 4) + (_mm_extract_epi16(r, 5) << 16);
-    *d = _mm_extract_epi16(r, 6) + (_mm_extract_epi16(r, 7) << 16);
-#endif  /* __SSE4__ */
 
     return p + detail::groupVarintLengths[key];
   }
 
-#else  /* !__SSSE3__ */
-  static const char* decode(const char* p, uint32_t* a, uint32_t* b,
-                            uint32_t* c, uint32_t* d) {
+#else // FOLLY_SSE >= 4
+  static const char* decode(
+      const char* p, uint32_t* a, uint32_t* b, uint32_t* c, uint32_t* d) {
     return decode_simple(p, a, b, c, d);
   }
 
   static const char* decode(const char* p, uint32_t* dest) {
     return decode_simple(p, dest);
   }
-#endif  /* __SSSE3__ */
+#endif // FOLLY_SSE >= 4
 
  private:
   static uint8_t key(uint32_t x) {
@@ -255,7 +257,6 @@ class GroupVarint<uint32_t> : public detail::GroupVarintBase<uint32_t> {
 
   static const uint32_t kMask[];
 };
-
 
 /**
  * GroupVarint encoding for 64-bit values.
@@ -273,10 +274,10 @@ class GroupVarint<uint64_t> : public detail::GroupVarintBase<uint64_t> {
   /**
    * Return the number of bytes used to encode these five values.
    */
-  static size_t size(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
-                     uint64_t e) {
-    return kHeaderSize + kGroupSize +
-           key(a) + key(b) + key(c) + key(d) + key(e);
+  static size_t size(
+      uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e) {
+    return kHeaderSize + kGroupSize + key(a) + key(b) + key(c) + key(d) +
+        key(e);
   }
 
   /**
@@ -310,15 +311,25 @@ class GroupVarint<uint64_t> : public detail::GroupVarintBase<uint64_t> {
     uint16_t v = loadUnaligned<uint16_t>(p);
     size_t s = kHeaderSize;
     s += 1 + b0key(v);
-    if (s > size) return 0;
+    if (s > size) {
+      return 0;
+    }
     s += 1 + b1key(v);
-    if (s > size) return 1;
+    if (s > size) {
+      return 1;
+    }
     s += 1 + b2key(v);
-    if (s > size) return 2;
+    if (s > size) {
+      return 2;
+    }
     s += 1 + b3key(v);
-    if (s > size) return 3;
+    if (s > size) {
+      return 3;
+    }
     s += 1 + b4key(v);
-    if (s > size) return 4;
+    if (s > size) {
+      return 4;
+    }
     return 5;
   }
 
@@ -328,8 +339,8 @@ class GroupVarint<uint64_t> : public detail::GroupVarintBase<uint64_t> {
    */
   static size_t encodedSize(const char* p) {
     uint16_t n = loadUnaligned<uint16_t>(p);
-    return kHeaderSize + kGroupSize +
-            b0key(n) + b1key(n) + b2key(n) + b3key(n) + b4key(n);
+    return kHeaderSize + kGroupSize + b0key(n) + b1key(n) + b2key(n) +
+        b3key(n) + b4key(n);
   }
 
   /**
@@ -337,8 +348,8 @@ class GroupVarint<uint64_t> : public detail::GroupVarintBase<uint64_t> {
    * the next position in the buffer (that is, one character past the last
    * encoded byte).  p needs to have at least size()+8 bytes available.
    */
-  static char* encode(char* p, uint64_t a, uint64_t b, uint64_t c,
-                      uint64_t d, uint64_t e) {
+  static char* encode(
+      char* p, uint64_t a, uint64_t b, uint64_t c, uint64_t d, uint64_t e) {
     uint16_t b0key = key(a);
     uint16_t b1key = key(b);
     uint16_t b2key = key(c);
@@ -347,22 +358,19 @@ class GroupVarint<uint64_t> : public detail::GroupVarintBase<uint64_t> {
     storeUnaligned<uint16_t>(
         p,
         uint16_t(
-            (b4key << 12) |
-            (b3key << 9) |
-            (b2key << 6) |
-            (b1key << 3) |
+            (b4key << 12) | (b3key << 9) | (b2key << 6) | (b1key << 3) |
             b0key));
     p += 2;
     storeUnaligned(p, a);
-    p += b0key+1;
+    p += b0key + 1;
     storeUnaligned(p, b);
-    p += b1key+1;
+    p += b1key + 1;
     storeUnaligned(p, c);
-    p += b2key+1;
+    p += b2key + 1;
     storeUnaligned(p, d);
-    p += b3key+1;
+    p += b3key + 1;
     storeUnaligned(p, e);
-    p += b4key+1;
+    p += b4key + 1;
     return p;
   }
 
@@ -380,25 +388,30 @@ class GroupVarint<uint64_t> : public detail::GroupVarintBase<uint64_t> {
    * The buffer needs to have at least 7 bytes available (they may be read
    * but ignored).
    */
-  static const char* decode(const char* p, uint64_t* a, uint64_t* b,
-                            uint64_t* c, uint64_t* d, uint64_t* e) {
+  static const char* decode(
+      const char* p,
+      uint64_t* a,
+      uint64_t* b,
+      uint64_t* c,
+      uint64_t* d,
+      uint64_t* e) {
     uint16_t k = loadUnaligned<uint16_t>(p);
     p += 2;
     uint8_t k0 = b0key(k);
     *a = loadUnaligned<uint64_t>(p) & kMask[k0];
-    p += k0+1;
+    p += k0 + 1;
     uint8_t k1 = b1key(k);
     *b = loadUnaligned<uint64_t>(p) & kMask[k1];
-    p += k1+1;
+    p += k1 + 1;
     uint8_t k2 = b2key(k);
     *c = loadUnaligned<uint64_t>(p) & kMask[k2];
-    p += k2+1;
+    p += k2 + 1;
     uint8_t k3 = b3key(k);
     *d = loadUnaligned<uint64_t>(p) & kMask[k3];
-    p += k3+1;
+    p += k3 + 1;
     uint8_t k4 = b4key(k);
     *e = loadUnaligned<uint64_t>(p) & kMask[k4];
-    p += k4+1;
+    p += k4 + 1;
     return p;
   }
 
@@ -407,7 +420,7 @@ class GroupVarint<uint64_t> : public detail::GroupVarintBase<uint64_t> {
    * pointed-to by dest, similar to decode(p,a,b,c,d,e) above.
    */
   static const char* decode(const char* p, uint64_t* dest) {
-    return decode(p, dest, dest+1, dest+2, dest+3, dest+4);
+    return decode(p, dest, dest + 1, dest + 2, dest + 3, dest + 4);
   }
 
  private:
@@ -444,14 +457,9 @@ class GroupVarintEncoder {
   typedef GroupVarint<T> Base;
   typedef T type;
 
-  explicit GroupVarintEncoder(Output out)
-    : out_(out),
-      count_(0) {
-  }
+  explicit GroupVarintEncoder(Output out) : out_(out), count_(0) {}
 
-  ~GroupVarintEncoder() {
-    finish();
-  }
+  ~GroupVarintEncoder() { finish(); }
 
   /**
    * Add a value to the encoder.
@@ -487,20 +495,14 @@ class GroupVarintEncoder {
   /**
    * Return the appender that was used.
    */
-  Output& output() {
-    return out_;
-  }
-  const Output& output() const {
-    return out_;
-  }
+  Output& output() { return out_; }
+  const Output& output() const { return out_; }
 
   /**
    * Reset the encoder, disregarding any state (except what was already
    * flushed to the output, of course).
    */
-  void clear() {
-    count_ = 0;
-  }
+  void clear() { count_ = 0; }
 
  private:
   Output out_;
@@ -522,16 +524,14 @@ class GroupVarintDecoder {
 
   GroupVarintDecoder() = default;
 
-  explicit GroupVarintDecoder(StringPiece data,
-                              size_t maxCount = (size_t)-1)
-    : rrest_(data.end()),
-      p_(data.data()),
-      end_(data.end()),
-      limit_(end_),
-      pos_(0),
-      count_(0),
-      remaining_(maxCount) {
-  }
+  explicit GroupVarintDecoder(StringPiece data, size_t maxCount = (size_t)-1)
+      : rrest_(data.end()),
+        p_(data.data()),
+        end_(data.end()),
+        limit_(end_),
+        pos_(0),
+        count_(0),
+        remaining_(maxCount) {}
 
   void reset(StringPiece data, size_t maxCount = (size_t)-1) {
     rrest_ = data.end();
@@ -623,6 +623,6 @@ class GroupVarintDecoder {
 typedef GroupVarintDecoder<uint32_t> GroupVarint32Decoder;
 typedef GroupVarintDecoder<uint64_t> GroupVarint64Decoder;
 
-}  // namespace folly
+} // namespace folly
 
-#endif /* FOLLY_X64 || defined(__i386__) || FOLLY_PPC64 */
+#endif // FOLLY_HAVE_GROUP_VARINT

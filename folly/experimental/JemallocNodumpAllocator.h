@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,12 +18,13 @@
 
 #pragma once
 
+#include <folly/CPortability.h>
 #include <folly/portability/Config.h>
+#include <folly/portability/Malloc.h>
 
-#ifdef FOLLY_HAVE_LIBJEMALLOC
+#if defined(FOLLY_USE_JEMALLOC) && !FOLLY_SANITIZE
 
 #include <folly/portability/SysMman.h>
-#include <jemalloc/jemalloc.h>
 
 #if (JEMALLOC_VERSION_MAJOR > 3) && defined(MADV_DONTDUMP)
 #define FOLLY_JEMALLOC_NODUMP_ALLOCATOR_SUPPORTED 1
@@ -36,7 +37,7 @@
 #endif
 #endif
 
-#endif // FOLLY_HAVE_LIBJEMALLOC
+#endif // FOLLY_USE_JEMALLOC
 
 #include <cstddef>
 
@@ -79,7 +80,7 @@ class JemallocNodumpAllocator {
 
   void* allocate(size_t size);
   void* reallocate(void* p, size_t size);
-  void deallocate(void* p);
+  void deallocate(void* p, size_t = 0);
 
   unsigned getArenaIndex() const { return arena_index_; }
   int getFlags() const { return flags_; }
@@ -115,4 +116,4 @@ class JemallocNodumpAllocator {
  */
 JemallocNodumpAllocator& globalJemallocNodumpAllocator();
 
-} // folly
+} // namespace folly

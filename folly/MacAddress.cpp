@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,10 +16,13 @@
 
 #include <folly/MacAddress.h>
 
+#include <cassert>
 #include <ostream>
 
 #include <folly/Exception.h>
+#include <folly/Format.h>
 #include <folly/IPAddressV6.h>
+#include <folly/String.h>
 
 using std::invalid_argument;
 using std::string;
@@ -36,7 +39,7 @@ MacAddress::MacAddress(StringPiece str) {
 
 MacAddress MacAddress::createMulticast(IPAddressV6 v6addr) {
   // This method should only be used for multicast addresses.
-  DCHECK(v6addr.isMulticast());
+  assert(v6addr.isMulticast());
 
   uint8_t bytes[SIZE];
   bytes[0] = 0x33;
@@ -69,85 +72,112 @@ string MacAddress::toString() const {
   return result;
 }
 
-void MacAddress::parse(StringPiece str) {
+Expected<Unit, MacAddressFormatError> MacAddress::trySetFromString(
+    StringPiece value) {
+  return setFromString(value, [](auto _, auto) { return makeUnexpected(_); });
+}
+
+void MacAddress::setFromString(StringPiece value) {
+  setFromString(value, [](auto, auto _) { return _(), unit; });
+}
+
+Expected<Unit, MacAddressFormatError> MacAddress::trySetFromBinary(
+    ByteRange value) {
+  return setFromBinary(value, [](auto _, auto) { return makeUnexpected(_); });
+}
+
+void MacAddress::setFromBinary(ByteRange value) {
+  setFromBinary(value, [](auto, auto _) { return _(), unit; });
+}
+
+template <typename OnError>
+Expected<Unit, MacAddressFormatError> MacAddress::setFromString(
+    StringPiece str, OnError err) {
   // Helper function to convert a single hex char into an integer
-  auto unhex = [](char c) -> int {
-    return c >= '0' && c <= '9' ? c - '0' :
-           c >= 'A' && c <= 'F' ? c - 'A' + 10 :
-           c >= 'a' && c <= 'f' ? c - 'a' + 10 :
-           -1;
-  };
-  auto isSeparatorChar = [](char c) {
-    return c == ':' || c == '-';
-  };
+  auto isSeparatorChar = [](char c) { return c == ':' || c == '-'; };
 
   uint8_t parsed[SIZE];
   auto p = str.begin();
   for (unsigned int byteIndex = 0; byteIndex < SIZE; ++byteIndex) {
     if (p == str.end()) {
-      throw invalid_argument(to<string>("invalid MAC address \"", str,
-                                        "\": not enough digits"));
+      return err(MacAddressFormatError::Invalid, [&] {
+        throw invalid_argument(
+            sformat("invalid MAC address '{}': not enough digits", str));
+      });
     }
 
     // Skip over ':' or '-' separators between bytes
     if (byteIndex != 0 && isSeparatorChar(*p)) {
       ++p;
       if (p == str.end()) {
-        throw invalid_argument(to<string>("invalid MAC address \"", str,
-                                          "\": not enough digits"));
+        return err(MacAddressFormatError::Invalid, [&] {
+          throw invalid_argument(
+              sformat("invalid MAC address '{}': not enough digits", str));
+        });
       }
     }
 
     // Parse the upper nibble
-    int upper = unhex(*p);
-    if (upper < 0) {
-      throw invalid_argument(to<string>("invalid MAC address \"", str,
-                                        "\": contains non-hex digit"));
+    uint8_t upper = detail::hexTable[static_cast<uint8_t>(*p)];
+    if (upper & 0x10) {
+      return err(MacAddressFormatError::Invalid, [&] {
+        throw invalid_argument(
+            sformat("invalid MAC address '{}': contains non-hex digit", str));
+      });
     }
     ++p;
 
     // Parse the lower nibble
-    int lower;
+    uint8_t lower;
     if (p == str.end()) {
       lower = upper;
       upper = 0;
     } else {
-      lower = unhex(*p);
-      if (lower < 0) {
+      lower = detail::hexTable[static_cast<uint8_t>(*p)];
+      if (lower & 0x10) {
         // Also accept ':', '-', or '\0', to handle the case where one
         // of the bytes was represented by just a single digit.
         if (isSeparatorChar(*p)) {
           lower = upper;
           upper = 0;
         } else {
-          throw invalid_argument(to<string>("invalid MAC address \"", str,
-                                            "\": contains non-hex digit"));
+          return err(MacAddressFormatError::Invalid, [&] {
+            throw invalid_argument(sformat(
+                "invalid MAC address '{}': contains non-hex digit", str));
+          });
         }
       }
       ++p;
     }
 
     // Update parsed with the newly parsed byte
-    parsed[byteIndex] = uint8_t((upper << 4) | lower);
+    parsed[byteIndex] = (upper << 4) | lower;
   }
 
   if (p != str.end()) {
     // String is too long to be a MAC address
-    throw invalid_argument(to<string>("invalid MAC address \"", str,
-                                      "\": found trailing characters"));
+    return err(MacAddressFormatError::Invalid, [&] {
+      throw invalid_argument(
+          sformat("invalid MAC address '{}': found trailing characters", str));
+    });
   }
 
   // Only update now that we have successfully parsed the entire
   // string.  This way we remain unchanged on error.
-  setFromBinary(ByteRange(parsed, SIZE));
+  return setFromBinary(ByteRange(parsed, SIZE), err);
 }
 
-void MacAddress::setFromBinary(ByteRange value) {
+template <typename OnError>
+Expected<Unit, MacAddressFormatError> MacAddress::setFromBinary(
+    ByteRange value, OnError err) {
   if (value.size() != SIZE) {
-    throw invalid_argument(to<string>("MAC address must be 6 bytes "
-                                      "long, got ", value.size()));
+    return err(MacAddressFormatError::Invalid, [&] {
+      throw invalid_argument(
+          sformat("MAC address must be 6 bytes long, got ", value.size()));
+    });
   }
   memcpy(bytes_ + 2, value.begin(), SIZE);
+  return unit;
 }
 
 std::ostream& operator<<(std::ostream& os, MacAddress address) {
@@ -155,4 +185,4 @@ std::ostream& operator<<(std::ostream& os, MacAddress address) {
   return os;
 }
 
-} // folly
+} // namespace folly

@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,15 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "folly/experimental/ThreadedRepeatingFunctionRunner.h"
 
-#include <folly/ThreadName.h>
-#include <glog/logging.h>
+#include <folly/experimental/ThreadedRepeatingFunctionRunner.h>
+
 #include <iostream>
+
+#include <folly/system/ThreadName.h>
+
+#include <glog/logging.h>
 
 namespace folly {
 
-ThreadedRepeatingFunctionRunner::ThreadedRepeatingFunctionRunner() {}
+ThreadedRepeatingFunctionRunner::ThreadedRepeatingFunctionRunner() = default;
 
 ThreadedRepeatingFunctionRunner::~ThreadedRepeatingFunctionRunner() {
   if (stopImpl()) {
@@ -54,15 +57,11 @@ bool ThreadedRepeatingFunctionRunner::stopImpl() {
 }
 
 void ThreadedRepeatingFunctionRunner::add(
-    std::string name,
-    RepeatingFn fn,
-    std::chrono::milliseconds initialSleep) {
-  threads_.emplace_back([
-    name = std::move(name),
-    fn = std::move(fn),
-    initialSleep,
-    this
-  ]() mutable {
+    std::string name, RepeatingFn fn, std::chrono::milliseconds initialSleep) {
+  threads_.emplace_back([name = std::move(name),
+                         fn = std::move(fn),
+                         initialSleep,
+                         this]() mutable {
     setThreadName(name);
     executeInLoop(std::move(fn), initialSleep);
   });
@@ -79,8 +78,7 @@ bool ThreadedRepeatingFunctionRunner::waitFor(
 }
 
 void ThreadedRepeatingFunctionRunner::executeInLoop(
-    RepeatingFn fn,
-    std::chrono::milliseconds initialSleep) noexcept {
+    RepeatingFn fn, std::chrono::milliseconds initialSleep) noexcept {
   auto duration = initialSleep;
   while (waitFor(duration)) {
     duration = fn();

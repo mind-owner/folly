@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,13 +17,14 @@
 #pragma once
 
 #include <stdexcept>
+#include <string>
 
-#include <folly/Format.h>
-#include <folly/io/async/DelayedDestruction.h>
+#include <folly/CPortability.h>
+#include <folly/Range.h>
 
 namespace folly {
 
-class AsyncSocketException : public std::runtime_error {
+class FOLLY_EXPORT AsyncSocketException : public std::runtime_error {
  public:
   enum AsyncSocketExceptionType {
     UNKNOWN = 0,
@@ -39,89 +40,38 @@ class AsyncSocketException : public std::runtime_error {
     INVALID_STATE = 10,
     SSL_ERROR = 12,
     COULD_NOT_BIND = 13,
-    SASL_HANDSHAKE_TIMEOUT = 14,
-    NETWORK_ERROR = 15
+    // SASL_HANDSHAKE_TIMEOUT = 14, // no longer used
+    NETWORK_ERROR = 15,
+    EARLY_DATA_REJECTED = 16,
+    CANCELED = 17,
   };
 
-  AsyncSocketException(AsyncSocketExceptionType type,
-                       const std::string& message,
-                       int errno_copy = 0)
-      : std::runtime_error(
-            AsyncSocketException::getMessage(type, message, errno_copy)),
+  AsyncSocketException(
+      AsyncSocketExceptionType type,
+      const std::string& message,
+      int errnoCopy = 0)
+      : std::runtime_error(getMessage(type, message, errnoCopy)),
         type_(type),
-        errno_(errno_copy) {}
+        errno_(errnoCopy) {}
+
+  AsyncSocketExceptionType getType() const noexcept { return type_; }
+
+  int getErrno() const noexcept { return errno_; }
+
+ protected:
+  /** get the string of exception type */
+  static folly::StringPiece getExceptionTypeString(
+      AsyncSocketExceptionType type);
+
+  /** Return a message based on the input. */
+  static std::string getMessage(
+      AsyncSocketExceptionType type, const std::string& message, int errnoCopy);
 
   /** Error code */
   AsyncSocketExceptionType type_;
 
   /** A copy of the errno. */
   int errno_;
-
-  AsyncSocketExceptionType getType() const noexcept { return type_; }
-  int getErrno() const noexcept { return errno_; }
-
- protected:
-  /** Just like strerror_r but returns a C++ string object. */
-  static std::string strerror_s(int errno_copy) {
-    return folly::sformat("errno = {} ({})", errno_copy, strerror(errno_copy));
-  }
-
-  /** get the string of exception type */
-  static folly::StringPiece getExceptionTypeString(
-      AsyncSocketExceptionType type) {
-    switch (type) {
-      case UNKNOWN:
-        return "Unknown async socket exception";
-      case NOT_OPEN:
-        return "Socket not open";
-      case ALREADY_OPEN:
-        return "Socket already open";
-      case TIMED_OUT:
-        return "Timed out";
-      case END_OF_FILE:
-        return "End of file";
-      case INTERRUPTED:
-        return "Interrupted";
-      case BAD_ARGS:
-        return "Invalid arguments";
-      case CORRUPTED_DATA:
-        return "Corrupted Data";
-      case INTERNAL_ERROR:
-        return "Internal error";
-      case NOT_SUPPORTED:
-        return "Not supported";
-      case INVALID_STATE:
-        return "Invalid state";
-      case SSL_ERROR:
-        return "SSL error";
-      case COULD_NOT_BIND:
-        return "Could not bind";
-      case SASL_HANDSHAKE_TIMEOUT:
-        return "SASL handshake timeout";
-      case NETWORK_ERROR:
-        return "Network error";
-      default:
-        return "(Invalid exception type)";
-    }
-  }
-
-  /** Return a message based on the input. */
-  static std::string getMessage(AsyncSocketExceptionType type,
-                                const std::string& message,
-                                int errno_copy) {
-    if (errno_copy != 0) {
-      return folly::sformat(
-          "AsyncSocketException: {}, type = {}, errno = {} ({})",
-          message,
-          AsyncSocketException::getExceptionTypeString(type),
-          errno_copy,
-          strerror(errno_copy));
-    } else {
-      return folly::sformat("AsyncSocketException: {}, type = {}",
-                            message,
-                            AsyncSocketException::getExceptionTypeString(type));
-    }
-  }
 };
 
-} // folly
+} // namespace folly

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,15 +16,18 @@
 
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <ostream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <folly/CPortability.h>
+#include <folly/Traits.h>
 #include <folly/stats/detail/Bucket.h>
 
 namespace folly {
@@ -60,19 +63,13 @@ class HistogramBuckets {
       const BucketType& defaultBucket);
 
   /* Returns the bucket size of each bucket in the histogram. */
-  ValueType getBucketSize() const {
-    return bucketSize_;
-  }
+  ValueType getBucketSize() const { return bucketSize_; }
 
   /* Returns the min value at which bucketing begins. */
-  ValueType getMin() const {
-    return min_;
-  }
+  ValueType getMin() const { return min_; }
 
   /* Returns the max value at which bucketing ends. */
-  ValueType getMax() const {
-    return max_;
-  }
+  ValueType getMax() const { return max_; }
 
   /*
    * Returns the number of buckets.
@@ -81,9 +78,7 @@ class HistogramBuckets {
    * plus 2 extra buckets, one for handling values less than min, and one for
    * values greater than max.
    */
-  size_t getNumBuckets() const {
-    return buckets_.size();
-  }
+  size_t getNumBuckets() const { return buckets_.size(); }
 
   /* Returns the bucket index into which the given value would fall. */
   size_t getBucketIdx(ValueType value) const;
@@ -104,14 +99,10 @@ class HistogramBuckets {
    * Note that index 0 is the bucket for all values less than the specified
    * minimum.  Index 1 is the first bucket in the specified bucket range.
    */
-  BucketType& getByIndex(size_t idx) {
-    return buckets_[idx];
-  }
+  BucketType& getByIndex(size_t idx) { return buckets_[idx]; }
 
   /* Returns the bucket at the specified index. */
-  const BucketType& getByIndex(size_t idx) const {
-    return buckets_[idx];
-  }
+  const BucketType& getByIndex(size_t idx) const { return buckets_[idx]; }
 
   /*
    * Returns the minimum threshold for the bucket at the given index.
@@ -195,9 +186,7 @@ class HistogramBuckets {
    */
   template <typename CountFn, typename AvgFn>
   ValueType getPercentileEstimate(
-      double pct,
-      CountFn countFromBucket,
-      AvgFn avgFromBucket) const;
+      double pct, CountFn countFromBucket, AvgFn avgFromBucket) const;
 
   /*
    * Iterator access to the buckets.
@@ -215,18 +204,17 @@ class HistogramBuckets {
   typename std::vector<BucketType>::const_iterator end() const {
     return buckets_.end();
   }
-  typename std::vector<BucketType>::iterator end() {
-    return buckets_.end();
-  }
+  typename std::vector<BucketType>::iterator end() { return buckets_.end(); }
 
  private:
+  static constexpr bool kIsExact = std::numeric_limits<ValueType>::is_exact;
   ValueType bucketSize_;
   ValueType min_;
   ValueType max_;
   std::vector<BucketType> buckets_;
 };
 
-} // detail
+} // namespace detail
 
 /*
  * A basic histogram class.
@@ -248,27 +236,24 @@ class Histogram {
       : buckets_(bucketSize, min, max, Bucket()) {}
 
   /* Add a data point to the histogram */
-  void addValue(ValueType value) FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER(
-      "signed-integer-overflow",
-      "unsigned-integer-overflow") {
+  void addValue(ValueType value) {
     Bucket& bucket = buckets_.getByValue(value);
     // NOTE: Overflow is handled elsewhere and tests check this
     // behavior (see HistogramTest.cpp TestOverflow* tests).
     // TODO: It would be nice to handle overflow here and redesign this class.
-    bucket.sum += value;
+    auto const addend = to_unsigned(value);
+    bucket.sum = static_cast<ValueType>(to_unsigned(bucket.sum) + addend);
     bucket.count += 1;
   }
 
   /* Add multiple same data points to the histogram */
-  void addRepeatedValue(ValueType value, uint64_t nSamples)
-      FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER(
-          "signed-integer-overflow",
-          "unsigned-integer-overflow") {
+  void addRepeatedValue(ValueType value, uint64_t nSamples) {
     Bucket& bucket = buckets_.getByValue(value);
     // NOTE: Overflow is handled elsewhere and tests check this
     // behavior (see HistogramTest.cpp TestOverflow* tests).
     // TODO: It would be nice to handle overflow here and redesign this class.
-    bucket.sum += value * nSamples;
+    auto const addend = to_unsigned(value) * nSamples;
+    bucket.sum = static_cast<ValueType>(to_unsigned(bucket.sum) + addend);
     bucket.count += nSamples;
   }
 
@@ -279,15 +264,14 @@ class Histogram {
    * had previously been added to the histogram; it merely subtracts the
    * requested value from the appropriate bucket's sum.
    */
-  void removeValue(ValueType value) FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER(
-      "signed-integer-overflow",
-      "unsigned-integer-overflow") {
+  void removeValue(ValueType value) {
     Bucket& bucket = buckets_.getByValue(value);
     // NOTE: Overflow is handled elsewhere and tests check this
     // behavior (see HistogramTest.cpp TestOverflow* tests).
     // TODO: It would be nice to handle overflow here and redesign this class.
     if (bucket.count > 0) {
-      bucket.sum -= value;
+      auto const subtrahend = to_unsigned(value);
+      bucket.sum = static_cast<ValueType>(to_unsigned(bucket.sum) - subtrahend);
       bucket.count -= 1;
     } else {
       bucket.sum = ValueType();
@@ -357,21 +341,13 @@ class Histogram {
   }
 
   /* Returns the bucket size of each bucket in the histogram. */
-  ValueType getBucketSize() const {
-    return buckets_.getBucketSize();
-  }
+  ValueType getBucketSize() const { return buckets_.getBucketSize(); }
   /* Returns the min value at which bucketing begins. */
-  ValueType getMin() const {
-    return buckets_.getMin();
-  }
+  ValueType getMin() const { return buckets_.getMin(); }
   /* Returns the max value at which bucketing ends. */
-  ValueType getMax() const {
-    return buckets_.getMax();
-  }
+  ValueType getMax() const { return buckets_.getMax(); }
   /* Returns the number of buckets */
-  size_t getNumBuckets() const {
-    return buckets_.getNumBuckets();
-  }
+  size_t getNumBuckets() const { return buckets_.getNumBuckets(); }
 
   /* Returns the specified bucket (for reading only!) */
   const Bucket& getBucketByIndex(size_t idx) const {
@@ -417,9 +393,7 @@ class Histogram {
    * returned in the lowPct and highPct arguments, if they are not nullptr.
    */
   size_t getPercentileBucketIdx(
-      double pct,
-      double* lowPct = nullptr,
-      double* highPct = nullptr) const {
+      double pct, double* lowPct = nullptr, double* highPct = nullptr) const {
     // We unfortunately can't use lambdas here yet;
     // Some users of this code are still built with gcc-4.4.
     CountFromBucket countFn;
@@ -452,9 +426,7 @@ class Histogram {
   void toTSV(std::ostream& out, bool skipEmptyBuckets = true) const;
 
   struct CountFromBucket {
-    uint64_t operator()(const Bucket& bucket) const {
-      return bucket.count;
-    }
+    uint64_t operator()(const Bucket& bucket) const { return bucket.count; }
   };
   struct AvgFromBucket {
     ValueType operator()(const Bucket& bucket) const {
@@ -475,7 +447,20 @@ class Histogram {
   };
 
  private:
+  template <typename S, typename = std::enable_if_t<std::is_integral<S>::value>>
+  static constexpr std::make_unsigned_t<S> to_unsigned(S s) {
+    return static_cast<std::make_unsigned_t<S>>(s);
+  }
+  template <
+      typename S,
+      typename = std::enable_if_t<!std::is_integral<S>::value>>
+  static constexpr S to_unsigned(S s) {
+    return s;
+  }
+
   detail::HistogramBuckets<ValueType, Bucket> buckets_;
 };
 
-} // folly
+} // namespace folly
+
+#include <folly/stats/Histogram-inl.h>

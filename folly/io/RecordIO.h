@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -32,8 +32,8 @@
 
 #include <folly/File.h>
 #include <folly/Range.h>
-#include <folly/MemoryMapping.h>
 #include <folly/io/IOBuf.h>
+#include <folly/system/MemoryMapping.h>
 
 namespace folly {
 
@@ -129,7 +129,7 @@ namespace recordio_helpers {
 /**
  * Header size.
  */
-constexpr size_t headerSize();  // defined in RecordIO-inl.h
+constexpr size_t headerSize(); // defined in RecordIO-inl.h
 
 /**
  * Write a header in the buffer.  We will prepend the header to the front
@@ -157,9 +157,8 @@ struct RecordInfo {
   uint32_t fileId;
   ByteRange record;
 };
-RecordInfo findRecord(ByteRange searchRange,
-                      ByteRange wholeRange,
-                      uint32_t fileId);
+RecordInfo findRecord(
+    ByteRange searchRange, ByteRange wholeRange, uint32_t fileId);
 
 /**
  * Search for the first valid record in range.
@@ -167,7 +166,26 @@ RecordInfo findRecord(ByteRange searchRange,
 RecordInfo findRecord(ByteRange range, uint32_t fileId);
 
 /**
- * Check if there is a valid record at the beginning of range.  Returns the
+ * Check if the Record Header is valid at the beginning of range.
+ * Useful to check the validity of the header before building the entire record
+ * in IOBuf. If the record is from storage device (e.g. flash) then, it
+ * is better to make sure that the header is valid before reading the data
+ * from the storage device.
+ * Returns true if valid, false otherwise.
+ */
+bool validateRecordHeader(ByteRange range, uint32_t fileId);
+
+/**
+ * Check if there Record Data is valid (to be used after validating the header
+ * separately)
+ * Returns the record data (not the header) if the record data is valid,
+ * ByteRange() otherwise.
+ */
+RecordInfo validateRecordData(ByteRange range);
+
+/**
+ * Check if there is a valid record at the beginning of range. This validates
+ * both record header and data and Returns the
  * record data (not the header) if the record is valid, ByteRange() otherwise.
  */
 RecordInfo validateRecord(ByteRange range, uint32_t fileId);

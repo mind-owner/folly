@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,40 +13,36 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/* -*- Mode: C++; tab-width: 2; c-basic-offset: 2; indent-tabs-mode: nil -*- */
 
 #include <atomic>
-#include <thread>
-#include <mutex>
-#include <folly/Memory.h>
 #include <condition_variable>
+#include <mutex>
+#include <thread>
 
-#include <folly/Baton.h>
-#include <folly/experimental/RCURefCount.h>
+#include <folly/Memory.h>
 #include <folly/experimental/ReadMostlySharedPtr.h>
 #include <folly/portability/GTest.h>
+#include <folly/synchronization/Baton.h>
 
 using folly::ReadMostlyMainPtr;
-using folly::ReadMostlyWeakPtr;
-using folly::ReadMostlySharedPtr;
 using folly::ReadMostlyMainPtrDeleter;
+using folly::ReadMostlySharedPtr;
+using folly::ReadMostlyWeakPtr;
 
 // send SIGALRM to test process after this many seconds
 const unsigned int TEST_TIMEOUT = 10;
 
 class ReadMostlySharedPtrTest : public ::testing::Test {
  public:
-  ReadMostlySharedPtrTest() {
-    alarm(TEST_TIMEOUT);
-  }
+  ReadMostlySharedPtrTest() { alarm(TEST_TIMEOUT); }
 };
 
 struct TestObject {
   int value;
   std::atomic<int>& counter;
 
-  TestObject(int value, std::atomic<int>& counter)
-      : value(value), counter(counter) {
+  TestObject(int value_, std::atomic<int>& counter_)
+      : value(value_), counter(counter_) {
     ++counter;
   }
 
@@ -65,14 +61,9 @@ class Coordinator {
     completeBaton_.wait();
   }
 
-  void waitForRequest() {
-    folly::RCURegisterThread();
-    requestBaton_.wait();
-  }
+  void waitForRequest() { requestBaton_.wait(); }
 
-  void completed() {
-    completeBaton_.post();
-  }
+  void completed() { completeBaton_.post(); }
 
  private:
   folly::Baton<> requestBaton_;
@@ -243,9 +234,7 @@ size_t useGlobalCalls = 0;
 
 class TestRefCount {
  public:
-  ~TestRefCount() noexcept {
-    DCHECK_EQ(count_.load(), 0);
-  }
+  ~TestRefCount() noexcept { DCHECK_EQ(count_.load(), 0); }
 
   int64_t operator++() noexcept {
     auto ret = ++count_;
@@ -259,13 +248,9 @@ class TestRefCount {
     return ret;
   }
 
-  int64_t operator*() noexcept {
-    return count_.load();
-  }
+  int64_t operator*() noexcept { return count_.load(); }
 
-  void useGlobal() {
-    ++useGlobalCalls;
-  }
+  void useGlobal() { ++useGlobalCalls; }
 
   template <typename Container>
   static void useGlobal(const Container&) {
@@ -346,4 +331,48 @@ TEST_F(ReadMostlySharedPtrTest, getStdShared) {
 
   // No conditions to check; we just wanted to ensure this compiles.
   SUCCEED();
+}
+
+struct Base {
+  virtual ~Base() = default;
+
+  virtual std::string getName() const { return "Base"; }
+};
+
+struct Derived : public Base {
+  std::string getName() const override { return "Derived"; }
+};
+
+TEST_F(ReadMostlySharedPtrTest, casts) {
+  ReadMostlyMainPtr<Derived> rmmp(std::make_shared<Derived>());
+  ReadMostlySharedPtr<Derived> rmsp(rmmp);
+  {
+    ReadMostlySharedPtr<Base> rmspbase(rmmp);
+    EXPECT_EQ("Derived", rmspbase->getName());
+    EXPECT_EQ("Derived", rmspbase.getStdShared()->getName());
+  }
+  {
+    ReadMostlySharedPtr<Base> rmspbase(rmsp);
+    EXPECT_EQ("Derived", rmspbase->getName());
+    EXPECT_EQ("Derived", rmspbase.getStdShared()->getName());
+  }
+  {
+    ReadMostlySharedPtr<Base> rmspbase;
+    rmspbase = rmsp;
+    EXPECT_EQ("Derived", rmspbase->getName());
+    EXPECT_EQ("Derived", rmspbase.getStdShared()->getName());
+  }
+  {
+    auto rmspcopy = rmsp;
+    ReadMostlySharedPtr<Base> rmspbase(std::move(rmspcopy));
+    EXPECT_EQ("Derived", rmspbase->getName());
+    EXPECT_EQ("Derived", rmspbase.getStdShared()->getName());
+  }
+  {
+    auto rmspcopy = rmsp;
+    ReadMostlySharedPtr<Base> rmspbase;
+    rmspbase = std::move(rmspcopy);
+    EXPECT_EQ("Derived", rmspbase->getName());
+    EXPECT_EQ("Derived", rmspbase.getStdShared()->getName());
+  }
 }

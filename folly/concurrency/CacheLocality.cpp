@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -22,25 +22,28 @@
 #endif
 #include <fstream>
 
+#include <fmt/core.h>
+
 #include <folly/Conv.h>
 #include <folly/Exception.h>
-#include <folly/FileUtil.h>
-#include <folly/Format.h>
 #include <folly/ScopeGuard.h>
+#include <folly/hash/Hash.h>
+#include <folly/portability/Unistd.h>
+#include <folly/system/ThreadId.h>
 
 namespace folly {
 
 ///////////// CacheLocality
 
-/// Returns the best real CacheLocality information available
+/// Returns the CacheLocality information best for this machine
 static CacheLocality getSystemLocalityInfo() {
-#ifdef __linux__
-  try {
-    return CacheLocality::readFromSysfs();
-  } catch (...) {
-    // keep trying
+  if (kIsLinux) {
+    try {
+      return CacheLocality::readFromProcCpuinfo();
+    } catch (...) {
+      // keep trying
+    }
   }
-#endif
 
   long numCpus = sysconf(_SC_NPROCESSORS_CONF);
   if (numCpus <= 0) {
@@ -59,8 +62,17 @@ static CacheLocality getSystemLocalityInfo() {
 
 template <>
 const CacheLocality& CacheLocality::system<std::atomic>() {
-  static auto* cache = new CacheLocality(getSystemLocalityInfo());
-  return *cache;
+  static std::atomic<const CacheLocality*> cache;
+  auto value = cache.load(std::memory_order_acquire);
+  if (value != nullptr) {
+    return *value;
+  }
+  auto next = new CacheLocality(getSystemLocalityInfo());
+  if (cache.compare_exchange_strong(value, next, std::memory_order_acq_rel)) {
+    return *next;
+  }
+  delete next;
+  return *value;
 }
 
 // Each level of cache has sharing sets, which are the set of cpus
@@ -108,11 +120,11 @@ CacheLocality CacheLocality::readFromSysfsTree(
     auto cpu = cpus.size();
     std::vector<size_t> levels;
     for (size_t index = 0;; ++index) {
-      auto dir =
-          sformat("/sys/devices/system/cpu/cpu{}/cache/index{}/", cpu, index);
+      auto dir = fmt::format(
+          "/sys/devices/system/cpu/cpu{}/cache/index{}/", cpu, index);
       auto cacheType = mapping(dir + "type");
       auto equivStr = mapping(dir + "shared_cpu_list");
-      if (cacheType.size() == 0 || equivStr.size() == 0) {
+      if (cacheType.empty() || equivStr.empty()) {
         // no more caches
         break;
       }
@@ -134,7 +146,7 @@ CacheLocality CacheLocality::readFromSysfsTree(
       }
     }
 
-    if (levels.size() == 0) {
+    if (levels.empty()) {
       // no levels at all for this cpu, we must be done
       break;
     }
@@ -142,7 +154,7 @@ CacheLocality CacheLocality::readFromSysfsTree(
     cpus.push_back(cpu);
   }
 
-  if (cpus.size() == 0) {
+  if (cpus.empty()) {
     throw std::runtime_error("unable to load cache sharing info");
   }
 
@@ -187,6 +199,96 @@ CacheLocality CacheLocality::readFromSysfs() {
   });
 }
 
+static bool procCpuinfoLineRelevant(std::string const& line) {
+  return line.size() > 4 && (line[0] == 'p' || line[0] == 'c');
+}
+
+CacheLocality CacheLocality::readFromProcCpuinfoLines(
+    std::vector<std::string> const& lines) {
+  size_t physicalId = 0;
+  size_t coreId = 0;
+  std::vector<std::tuple<size_t, size_t, size_t>> cpus;
+  size_t maxCpu = 0;
+  for (auto iter = lines.rbegin(); iter != lines.rend(); ++iter) {
+    auto& line = *iter;
+    if (!procCpuinfoLineRelevant(line)) {
+      continue;
+    }
+
+    auto sepIndex = line.find(':');
+    if (sepIndex == std::string::npos || sepIndex + 2 > line.size()) {
+      continue;
+    }
+    auto arg = line.substr(sepIndex + 2);
+
+    // "physical id" is socket, which is the most important locality
+    // context.  "core id" is a real core, so two "processor" entries with
+    // the same physical id and core id are hyperthreads of each other.
+    // "processor" is the top line of each record, so when we hit it in
+    // the reverse order then we can emit a record.
+    if (line.find("physical id") == 0) {
+      physicalId = parseLeadingNumber(arg);
+    } else if (line.find("core id") == 0) {
+      coreId = parseLeadingNumber(arg);
+    } else if (line.find("processor") == 0) {
+      auto cpu = parseLeadingNumber(arg);
+      maxCpu = std::max(cpu, maxCpu);
+      cpus.emplace_back(physicalId, coreId, cpu);
+    }
+  }
+
+  if (cpus.empty()) {
+    throw std::runtime_error("no CPUs parsed from /proc/cpuinfo");
+  }
+  if (maxCpu != cpus.size() - 1) {
+    throw std::runtime_error(
+        "offline CPUs not supported for /proc/cpuinfo cache locality source");
+  }
+
+  std::sort(cpus.begin(), cpus.end());
+  size_t cpusPerCore = 1;
+  while (cpusPerCore < cpus.size() &&
+         std::get<0>(cpus[cpusPerCore]) == std::get<0>(cpus[0]) &&
+         std::get<1>(cpus[cpusPerCore]) == std::get<1>(cpus[0])) {
+    ++cpusPerCore;
+  }
+
+  // we can't tell the real cache hierarchy from /proc/cpuinfo, but it
+  // works well enough to assume there are 3 levels, L1 and L2 per-core
+  // and L3 per socket
+  std::vector<size_t> numCachesByLevel;
+  numCachesByLevel.push_back(cpus.size() / cpusPerCore);
+  numCachesByLevel.push_back(cpus.size() / cpusPerCore);
+  numCachesByLevel.push_back(std::get<0>(cpus.back()) + 1);
+
+  std::vector<size_t> indexes(cpus.size());
+  for (size_t i = 0; i < cpus.size(); ++i) {
+    indexes[std::get<2>(cpus[i])] = i;
+  }
+
+  return CacheLocality{
+      cpus.size(), std::move(numCachesByLevel), std::move(indexes)};
+}
+
+CacheLocality CacheLocality::readFromProcCpuinfo() {
+  std::vector<std::string> lines;
+  {
+    std::ifstream xi("/proc/cpuinfo");
+    if (xi.fail()) {
+      throw std::runtime_error("unable to open /proc/cpuinfo");
+    }
+    char buf[8192];
+    while (xi.good() && lines.size() < 20000) {
+      xi.getline(buf, sizeof(buf));
+      std::string str(buf);
+      if (procCpuinfoLineRelevant(str)) {
+        lines.emplace_back(std::move(str));
+      }
+    }
+  }
+  return readFromProcCpuinfoLines(lines);
+}
+
 CacheLocality CacheLocality::uniform(size_t numCpus) {
   CacheLocality rv;
 
@@ -206,7 +308,7 @@ CacheLocality CacheLocality::uniform(size_t numCpus) {
 ////////////// Getcpu
 
 Getcpu::Func Getcpu::resolveVdsoFunc() {
-#if !FOLLY_HAVE_LINUX_VDSO
+#if !defined(FOLLY_HAVE_LINUX_VDSO) || defined(FOLLY_SANITIZE_MEMORY)
   return nullptr;
 #else
   void* h = dlopen("linux-vdso.so.1", RTLD_LAZY | RTLD_LOCAL | RTLD_NOLOAD);
@@ -227,13 +329,71 @@ Getcpu::Func Getcpu::resolveVdsoFunc() {
 #endif
 }
 
-#ifdef FOLLY_TLS
 /////////////// SequentialThreadId
-template struct SequentialThreadId<std::atomic>;
-#endif
+unsigned SequentialThreadId::get() {
+  static std::atomic<unsigned> global{0};
+  static thread_local unsigned local{0};
+  return FOLLY_LIKELY(local) ? local : (local = ++global);
+}
 
-/////////////// AccessSpreader
-template struct AccessSpreader<std::atomic>;
+/////////////// HashingThreadId
+unsigned HashingThreadId::get() {
+  return hash::twang_32from64(getCurrentThreadID());
+}
+
+namespace detail {
+
+int AccessSpreaderBase::degenerateGetcpu(unsigned* cpu, unsigned* node, void*) {
+  if (cpu != nullptr) {
+    *cpu = 0;
+  }
+  if (node != nullptr) {
+    *node = 0;
+  }
+  return 0;
+}
+
+struct AccessSpreaderStaticInit {
+  static AccessSpreaderStaticInit instance;
+  AccessSpreaderStaticInit() { (void)AccessSpreader<>::current(~size_t(0)); }
+};
+AccessSpreaderStaticInit AccessSpreaderStaticInit::instance;
+
+bool AccessSpreaderBase::initialize(
+    GlobalState& state,
+    Getcpu::Func (&pickGetcpuFunc)(),
+    const CacheLocality& (&system)()) {
+  (void)AccessSpreaderStaticInit::instance; // ODR-use it so it is not dropped
+  auto& cacheLocality = system();
+  auto n = cacheLocality.numCpus;
+  for (size_t width = 0; width <= kMaxCpus; ++width) {
+    auto& row = state.table[width];
+    auto numStripes = std::max(size_t{1}, width);
+    for (size_t cpu = 0; cpu < kMaxCpus && cpu < n; ++cpu) {
+      auto index = cacheLocality.localityIndexByCpu[cpu];
+      assert(index < n);
+      // as index goes from 0..n, post-transform value goes from
+      // 0..numStripes
+      row[cpu] = static_cast<CompactStripe>((index * numStripes) / n);
+      assert(row[cpu] < numStripes);
+    }
+    size_t filled = n;
+    while (filled < kMaxCpus) {
+      size_t len = std::min(filled, kMaxCpus - filled);
+      for (size_t i = 0; i < len; ++i) {
+        row[filled + i] = row[i].load();
+      }
+      filled += len;
+    }
+    for (size_t cpu = n; cpu < kMaxCpus; ++cpu) {
+      assert(row[cpu] == row[cpu - n]);
+    }
+  }
+  state.getcpu.exchange(pickGetcpuFunc(), std::memory_order_acq_rel);
+  return true;
+}
+
+} // namespace detail
 
 SimpleAllocator::SimpleAllocator(size_t allocSize, size_t sz)
     : allocSize_{allocSize}, sz_(sz) {}
@@ -241,25 +401,23 @@ SimpleAllocator::SimpleAllocator(size_t allocSize, size_t sz)
 SimpleAllocator::~SimpleAllocator() {
   std::lock_guard<std::mutex> g(m_);
   for (auto& block : blocks_) {
-    detail::aligned_free(block);
+    folly::aligned_free(block);
   }
 }
 
 void* SimpleAllocator::allocateHard() {
   // Allocate a new slab.
-  mem_ = static_cast<uint8_t*>(detail::aligned_malloc(allocSize_, allocSize_));
+  mem_ = static_cast<uint8_t*>(folly::aligned_malloc(allocSize_, allocSize_));
   if (!mem_) {
-    std::__throw_bad_alloc();
+    throw_exception<std::bad_alloc>();
   }
   end_ = mem_ + allocSize_;
   blocks_.push_back(mem_);
 
   // Install a pointer to ourselves as the allocator.
   *reinterpret_cast<SimpleAllocator**>(mem_) = this;
-  static_assert(
-      alignof(std::max_align_t) >= sizeof(SimpleAllocator*),
-      "alignment too small");
-  mem_ += std::min(sz_, alignof(std::max_align_t));
+  static_assert(max_align_v >= sizeof(SimpleAllocator*), "alignment too small");
+  mem_ += std::min(sz_, max_align_v);
 
   // New allocation.
   auto mem = mem_;

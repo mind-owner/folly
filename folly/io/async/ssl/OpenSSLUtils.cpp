@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,15 +14,18 @@
  * limitations under the License.
  */
 
+#include <folly/io/async/AsyncSocketException.h>
 #include <folly/io/async/ssl/OpenSSLUtils.h>
 
-#include <glog/logging.h>
-
 #include <unordered_map>
+
+#include <glog/logging.h>
 
 #include <folly/ScopeGuard.h>
 #include <folly/portability/Sockets.h>
 #include <folly/portability/Unistd.h>
+#include <folly/ssl/Init.h>
+#include <folly/ssl/detail/OpenSSLSession.h>
 
 namespace {
 #ifdef OPENSSL_IS_BORINGSSL
@@ -31,49 +34,55 @@ namespace {
 static int boringssl_bio_fd_should_retry(int err);
 #endif
 
-}
+} // namespace
 
 namespace folly {
 namespace ssl {
 
 bool OpenSSLUtils::getTLSMasterKey(
-    const SSL_SESSION* session,
-    MutableByteRange keyOut) {
-#if FOLLY_OPENSSL_IS_101 || FOLLY_OPENSSL_IS_102
-  if (session &&
-      session->master_key_length == static_cast<int>(keyOut.size())) {
-    auto masterKey = session->master_key;
-    std::copy(
-        masterKey, masterKey + session->master_key_length, keyOut.begin());
-    return true;
+    const SSL_SESSION* session, MutableByteRange keyOut) {
+#if FOLLY_OPENSSL_IS_110
+  auto size = SSL_SESSION_get_master_key(session, nullptr, 0);
+  if (size == keyOut.size()) {
+    return SSL_SESSION_get_master_key(session, keyOut.begin(), keyOut.size());
   }
 #else
-  (SSL_SESSION*)session;
-  (MutableByteRange) keyOut;
+  (void)session;
+  (void)keyOut;
 #endif
+  return false;
+}
+
+bool OpenSSLUtils::getTLSMasterKey(
+    const std::shared_ptr<SSLSession> session, MutableByteRange keyOut) {
+  auto openSSLSession =
+      std::dynamic_pointer_cast<folly::ssl::detail::OpenSSLSession>(session);
+  if (openSSLSession) {
+    auto rawSessionPtr = openSSLSession->getActiveSession();
+    SSL_SESSION* rawSession = rawSessionPtr.get();
+    if (rawSession) {
+      return OpenSSLUtils::getTLSMasterKey(rawSession, keyOut);
+    }
+  }
   return false;
 }
 
 bool OpenSSLUtils::getTLSClientRandom(
-    const SSL* ssl,
-    MutableByteRange randomOut) {
-#if FOLLY_OPENSSL_IS_101 || FOLLY_OPENSSL_IS_102
-  if ((SSL_version(ssl) >> 8) == TLS1_VERSION_MAJOR && ssl->s3 &&
-      randomOut.size() == SSL3_RANDOM_SIZE) {
-    auto clientRandom = ssl->s3->client_random;
-    std::copy(clientRandom, clientRandom + SSL3_RANDOM_SIZE, randomOut.begin());
-    return true;
+    const SSL* ssl, MutableByteRange randomOut) {
+#if FOLLY_OPENSSL_IS_110
+  auto size = SSL_get_client_random(ssl, nullptr, 0);
+  if (size == randomOut.size()) {
+    return SSL_get_client_random(ssl, randomOut.begin(), randomOut.size());
   }
 #else
-  (SSL*)ssl;
-  (MutableByteRange) randomOut;
+  (void)ssl;
+  (void)randomOut;
 #endif
   return false;
 }
 
-bool OpenSSLUtils::getPeerAddressFromX509StoreCtx(X509_STORE_CTX* ctx,
-                                                  sockaddr_storage* addrStorage,
-                                                  socklen_t* addrLen) {
+bool OpenSSLUtils::getPeerAddressFromX509StoreCtx(
+    X509_STORE_CTX* ctx, sockaddr_storage* addrStorage, socklen_t* addrLen) {
   // Grab the ssl idx and then the ssl object so that we can get the peer
   // name to compare against the ips in the subjectAltName
   auto sslIdx = SSL_get_ex_data_X509_STORE_CTX_idx();
@@ -93,9 +102,8 @@ bool OpenSSLUtils::getPeerAddressFromX509StoreCtx(X509_STORE_CTX* ctx,
   return true;
 }
 
-bool OpenSSLUtils::validatePeerCertNames(X509* cert,
-                                         const sockaddr* addr,
-                                         socklen_t /* addrLen */) {
+bool OpenSSLUtils::validatePeerCertNames(
+    X509* cert, const sockaddr* addr, socklen_t /* addrLen */) {
   // Try to extract the names within the SAN extension from the certificate
   auto altNames = reinterpret_cast<STACK_OF(GENERAL_NAME)*>(
       X509_get_ext_d2i(cert, NID_subject_alt_name, nullptr, nullptr));
@@ -126,7 +134,7 @@ bool OpenSSLUtils::validatePeerCertNames(X509* cert,
     if ((addr4 != nullptr || addr6 != nullptr) && name->type == GEN_IPADD) {
       // Extra const-ness for paranoia
       unsigned char const* const rawIpStr = name->d.iPAddress->data;
-      size_t const rawIpLen = size_t(name->d.iPAddress->length);
+      auto const rawIpLen = size_t(name->d.iPAddress->length);
 
       if (rawIpLen == 4 && addr4 != nullptr) {
         if (::memcmp(rawIpStr, &addr4->sin_addr, rawIpLen) == 0) {
@@ -147,26 +155,25 @@ bool OpenSSLUtils::validatePeerCertNames(X509* cert,
 }
 
 static std::unordered_map<uint16_t, std::string> getOpenSSLCipherNames() {
+  folly::ssl::init();
   std::unordered_map<uint16_t, std::string> ret;
   SSL_CTX* ctx = nullptr;
   SSL* ssl = nullptr;
 
-  const SSL_METHOD* meth = SSLv23_server_method();
+  const SSL_METHOD* meth = TLS_server_method();
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
   OpenSSL_add_ssl_algorithms();
+#endif
 
   if ((ctx = SSL_CTX_new(meth)) == nullptr) {
     return ret;
   }
-  SCOPE_EXIT {
-    SSL_CTX_free(ctx);
-  };
+  SCOPE_EXIT { SSL_CTX_free(ctx); };
 
   if ((ssl = SSL_new(ctx)) == nullptr) {
     return ret;
   }
-  SCOPE_EXIT {
-    SSL_free(ssl);
-  };
+  SCOPE_EXIT { SSL_free(ssl); };
 
   STACK_OF(SSL_CIPHER)* sk = SSL_get_ciphers(ssl);
   for (int i = 0; i < sk_SSL_CIPHER_num(sk); i++) {
@@ -244,16 +251,14 @@ BioMethodUniquePtr OpenSSLUtils::newSocketBioMethod() {
 }
 
 bool OpenSSLUtils::setCustomBioReadMethod(
-    BIO_METHOD* bioMeth,
-    int (*meth)(BIO*, char*, int)) {
+    BIO_METHOD* bioMeth, int (*meth)(BIO*, char*, int)) {
   bool ret = false;
   ret = (BIO_meth_set_read(bioMeth, meth) == 1);
   return ret;
 }
 
 bool OpenSSLUtils::setCustomBioWriteMethod(
-    BIO_METHOD* bioMeth,
-    int (*meth)(BIO*, const char*, int)) {
+    BIO_METHOD* bioMeth, int (*meth)(BIO*, const char*, int)) {
   bool ret = false;
   ret = (BIO_meth_set_write(bioMeth, meth) == 1);
   return ret;
@@ -285,33 +290,113 @@ void* OpenSSLUtils::getBioAppData(BIO* b) {
 #endif
 }
 
-int OpenSSLUtils::getBioFd(BIO* b, int* fd) {
+NetworkSocket OpenSSLUtils::getBioFd(BIO* b) {
+  auto ret = BIO_get_fd(b, nullptr);
 #ifdef _WIN32
-  int ret = portability::sockets::socket_to_fd((SOCKET)BIO_get_fd(b, fd));
-  if (fd != nullptr) {
-    *fd = ret;
-  }
-  return ret;
+  return NetworkSocket((SOCKET)ret);
 #else
-  return BIO_get_fd(b, fd);
+  return NetworkSocket(ret);
 #endif
 }
 
-void OpenSSLUtils::setBioFd(BIO* b, int fd, int flags) {
+void OpenSSLUtils::setBioFd(BIO* b, NetworkSocket fd, int flags) {
 #ifdef _WIN32
-  SOCKET socket = portability::sockets::fd_to_socket(fd);
   // Internally OpenSSL uses this as an int for reasons completely
   // beyond any form of sanity, so we do the cast ourselves to avoid
   // the warnings that would be generated.
-  int sock = int(socket);
+  int sock = int(fd.data);
 #else
-  int sock = fd;
+  int sock = fd.toFd();
 #endif
   BIO_set_fd(b, sock, flags);
 }
 
-} // ssl
-} // folly
+std::string OpenSSLUtils::getCommonName(X509* x509) {
+  if (x509 == nullptr) {
+    return "";
+  }
+  X509_NAME* subject = X509_get_subject_name(x509);
+  char buf[ub_common_name + 1];
+  int length =
+      X509_NAME_get_text_by_NID(subject, NID_commonName, buf, sizeof(buf));
+  if (length == -1) {
+    // no CN
+    return "";
+  }
+  // length tells us where the name ends
+  return std::string(buf, length);
+}
+
+std::string OpenSSLUtils::encodeALPNString(
+    const std::vector<std::string>& supportedProtocols) {
+  unsigned int length = 0;
+  for (const auto& proto : supportedProtocols) {
+    if (proto.size() > std::numeric_limits<uint8_t>::max()) {
+      throw std::range_error("ALPN protocol string exceeds maximum length");
+    }
+    length += proto.size() + 1;
+  }
+
+  std::string encodedALPN;
+  encodedALPN.reserve(length);
+
+  for (const auto& proto : supportedProtocols) {
+    encodedALPN.append(1, static_cast<char>(proto.size()));
+    encodedALPN.append(proto);
+  }
+  return encodedALPN;
+}
+
+/**
+ * Deserializes PEM encoded X509 objects from the supplied source BIO, invoking
+ * a callback for each X509, until the BIO is exhausted or until we were unable
+ * to read an X509.
+ */
+template <class Callback>
+static void forEachX509(BIO* source, Callback cb) {
+  while (true) {
+    ssl::X509UniquePtr x509(
+        PEM_read_bio_X509(source, nullptr, nullptr, nullptr));
+    if (x509 == nullptr) {
+      ERR_clear_error();
+      break;
+    }
+    cb(std::move(x509));
+  }
+}
+
+static std::vector<X509NameUniquePtr> getSubjectNamesFromBIO(BIO* b) {
+  std::vector<X509NameUniquePtr> ret;
+  forEachX509(b, [&](auto&& name) {
+    // X509_get_subject_name borrows the X509_NAME, so we must dup it.
+    ret.push_back(
+        X509NameUniquePtr(X509_NAME_dup(X509_get_subject_name(name.get()))));
+  });
+  return ret;
+}
+
+std::vector<X509NameUniquePtr> OpenSSLUtils::subjectNamesInPEMFile(
+    const char* filename) {
+  BioUniquePtr bio(BIO_new_file(filename, "r"));
+  if (!bio) {
+    throw std::runtime_error(
+        "OpenSSLUtils::subjectNamesInPEMFile: failed to open file");
+  }
+  return getSubjectNamesFromBIO(bio.get());
+}
+
+std::vector<X509NameUniquePtr> OpenSSLUtils::subjectNamesInPEMBuffer(
+    folly::ByteRange buffer) {
+  BioUniquePtr bio(BIO_new_mem_buf(buffer.data(), buffer.size()));
+  if (!bio) {
+    throw std::runtime_error(
+        "OpenSSLUtils::subjectNamesInPEMBuffer: failed to create BIO");
+  }
+  return getSubjectNamesFromBIO(bio.get());
+}
+
+} // namespace ssl
+} // namespace folly
 
 namespace {
 #ifdef OPENSSL_IS_BORINGSSL
@@ -319,30 +404,30 @@ namespace {
 static int boringssl_bio_fd_non_fatal_error(int err) {
   if (
 #ifdef EWOULDBLOCK
-    err == EWOULDBLOCK ||
+      err == EWOULDBLOCK ||
 #endif
 #ifdef WSAEWOULDBLOCK
-    err == WSAEWOULDBLOCK ||
+      err == WSAEWOULDBLOCK ||
 #endif
 #ifdef ENOTCONN
-    err == ENOTCONN ||
+      err == ENOTCONN ||
 #endif
 #ifdef EINTR
-    err == EINTR ||
+      err == EINTR ||
 #endif
 #ifdef EAGAIN
-    err == EAGAIN ||
+      err == EAGAIN ||
 #endif
 #ifdef EPROTO
-    err == EPROTO ||
+      err == EPROTO ||
 #endif
 #ifdef EINPROGRESS
-    err == EINPROGRESS ||
+      err == EINPROGRESS ||
 #endif
 #ifdef EALREADY
-    err == EALREADY ||
+      err == EALREADY ||
 #endif
-    0) {
+      0) {
     return 1;
   }
   return 0;
@@ -369,4 +454,4 @@ int boringssl_bio_fd_should_retry(int i) {
 
 #endif // OEPNSSL_IS_BORINGSSL
 
-}
+} // namespace

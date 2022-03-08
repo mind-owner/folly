@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// Copyright 2004-present Facebook. All Rights Reserved.
+
 #pragma once
 
 namespace folly {
@@ -28,9 +28,7 @@ class CursorStringAppender {
   void append(ByteRange bytes) {
     str_.append(reinterpret_cast<char const*>(bytes.data()), bytes.size());
   }
-  std::string extractString() {
-    return std::move(str_);
-  }
+  std::string extractString() { return std::move(str_); }
 
  private:
   std::string str_;
@@ -43,8 +41,7 @@ class CursorNoopAppender {
 
 template <class Derived, class BufType>
 std::string CursorBase<Derived, BufType>::readTerminatedString(
-    char termChar,
-    size_t maxLength) {
+    char termChar, size_t maxLength) {
   size_t bytesRead{0};
   auto keepReading = [&bytesRead, termChar, maxLength](uint8_t byte) {
     if (byte == termChar) {
@@ -60,7 +57,7 @@ std::string CursorBase<Derived, BufType>::readTerminatedString(
   auto result = readWhile(keepReading);
   // skip over the terminator character
   if (isAtEnd()) {
-    std::__throw_out_of_range("terminator not found");
+    throw_exception<std::out_of_range>("terminator not found");
   }
   skip(1);
 
@@ -79,8 +76,7 @@ std::string CursorBase<Derived, BufType>::readWhile(
 template <class Derived, class BufType>
 template <typename Predicate, typename Output>
 void CursorBase<Derived, BufType>::readWhile(
-    const Predicate& predicate,
-    Output& out) {
+    const Predicate& predicate, Output& out) {
   while (true) {
     auto peeked = peekBytes();
     if (peeked.empty()) {

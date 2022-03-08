@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,15 +16,17 @@
 
 #pragma once
 
-#include <glog/logging.h>
 #include <sys/types.h>
+
 #include <algorithm>
 #include <array>
 #include <cstring>
 #include <string>
 #include <type_traits>
 
-#include <folly/Conv.h>
+#include <glog/logging.h>
+
+#include <fmt/core.h>
 #include <folly/detail/IPAddress.h>
 
 // BSDish platforms don't provide standard access to s6_addr16
@@ -45,8 +47,7 @@ struct Bytes {
   // mask the values from two byte arrays, returning a new byte array
   template <std::size_t N>
   static std::array<uint8_t, N> mask(
-      const std::array<uint8_t, N>& a,
-      const std::array<uint8_t, N>& b) {
+      const std::array<uint8_t, N>& a, const std::array<uint8_t, N>& b) {
     static_assert(N > 0, "Can't mask an empty ByteArray");
     std::size_t asize = a.size();
     std::array<uint8_t, N> ba{{0}};
@@ -74,11 +75,9 @@ struct Bytes {
         0xff // /8
     }};
     if (oneMask > kBitCount || twoMask > kBitCount) {
-      throw std::invalid_argument(folly::to<std::string>(
-          "Invalid mask "
-          "length: ",
-          oneMask > twoMask ? oneMask : twoMask,
-          ". Mask length must be <= ",
+      throw std::invalid_argument(fmt::format(
+          "Invalid mask length: {}. Mask length must be <= {}",
+          std::max(oneMask, twoMask),
           kBitCount));
     }
 
@@ -246,6 +245,8 @@ inline void fastIpv4AppendToString(const in_addr& inAddr, std::string& out) {
 inline size_t fastIpv6ToBufferUnsafe(const in6_addr& in6Addr, char* str) {
 #ifdef _MSC_VER
   const uint16_t* bytes = reinterpret_cast<const uint16_t*>(&in6Addr.u.Word);
+#elif defined __XROS__
+  const uint16_t* bytes = reinterpret_cast<const uint16_t*>(&in6Addr.s6_addr);
 #else
   const uint16_t* bytes = reinterpret_cast<const uint16_t*>(&in6Addr.s6_addr16);
 #endif
@@ -275,5 +276,5 @@ inline void fastIpv6AppendToString(const in6_addr& in6Addr, std::string& out) {
   char str[sizeof("2001:0db8:0000:0000:0000:ff00:0042:8329")];
   out.append(str, fastIpv6ToBufferUnsafe(in6Addr, str));
 }
-}
-}
+} // namespace detail
+} // namespace folly

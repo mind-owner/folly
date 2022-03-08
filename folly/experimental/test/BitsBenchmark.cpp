@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,10 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <atomic>
-#include <glog/logging.h>
-#include <random>
 #include <memory>
+#include <random>
+
+#include <glog/logging.h>
 
 #include <folly/Benchmark.h>
 #include <folly/experimental/Bits.h>
@@ -28,7 +30,7 @@ std::vector<uint8_t> buffer(kBufferSize + 16);
 
 template <class T>
 void benchmarkSet(size_t n, T) {
-  size_t size = sizeof(T) * 6.9; // use 6.9 bits/byte
+  size_t size = folly::to_integral(sizeof(T) * 6.9); // use 6.9 bits/byte
   const size_t k = 16;
   T values[k];
   BENCHMARK_SUSPEND {
@@ -52,20 +54,23 @@ void benchmarkSet(size_t n, T) {
   for (size_t i = 0; i < n; ++i) {
     size_t bit = (i * 2973) % (kBufferSize * 8);
     size_t drop = i % size;
-    folly::Bits<T>::set(reinterpret_cast<T *>(buffer.data()),
-                        bit, size - drop, values[i % k] >> drop);
+    folly::Bits<T>::set(
+        reinterpret_cast<T*>(buffer.data()),
+        bit,
+        size - drop,
+        values[i % k] >> drop);
   }
 
   folly::doNotOptimizeAway(
-      folly::Bits<T>::test(reinterpret_cast<T *>(buffer.data()), 512));
+      folly::Bits<T>::test(reinterpret_cast<T*>(buffer.data()), 512));
 }
 
-BENCHMARK_NAMED_PARAM(benchmarkSet, u16, uint16_t());
-BENCHMARK_RELATIVE_NAMED_PARAM(benchmarkSet, i16, int16_t());
-BENCHMARK_NAMED_PARAM(benchmarkSet, u32, uint32_t());
-BENCHMARK_RELATIVE_NAMED_PARAM(benchmarkSet, i32, int32_t());
-BENCHMARK_NAMED_PARAM(benchmarkSet, u64, uint64_t());
-BENCHMARK_RELATIVE_NAMED_PARAM(benchmarkSet, i64, int64_t());
+BENCHMARK_NAMED_PARAM(benchmarkSet, u16, uint16_t())
+BENCHMARK_RELATIVE_NAMED_PARAM(benchmarkSet, i16, int16_t())
+BENCHMARK_NAMED_PARAM(benchmarkSet, u32, uint32_t())
+BENCHMARK_RELATIVE_NAMED_PARAM(benchmarkSet, i32, int32_t())
+BENCHMARK_NAMED_PARAM(benchmarkSet, u64, uint64_t())
+BENCHMARK_RELATIVE_NAMED_PARAM(benchmarkSet, i64, int64_t())
 
 BENCHMARK_DRAW_LINE();
 
@@ -73,22 +78,22 @@ std::atomic<int64_t> sum(0);
 
 template <class T>
 void benchmarkGet(size_t n, T x) {
-  size_t size = sizeof(T) * 6.9; // use 6.9 bits/byte
+  size_t size = folly::to_integral(sizeof(T) * 6.9); // use 6.9 bits/byte
   for (size_t i = 0; i < n; ++i) {
     size_t bit = (i * 2973) % (kBufferSize * 8);
     size_t drop = i % size;
     x += folly::Bits<T>::get(
-        reinterpret_cast<T *>(buffer.data()), bit, size - drop);
+        reinterpret_cast<T*>(buffer.data()), bit, size - drop);
   }
   folly::doNotOptimizeAway(x);
 }
 
-BENCHMARK_NAMED_PARAM(benchmarkGet, u16, uint16_t(0));
-BENCHMARK_RELATIVE_NAMED_PARAM(benchmarkGet, i16, int16_t(0));
-BENCHMARK_NAMED_PARAM(benchmarkGet, u32, uint32_t(0));
-BENCHMARK_RELATIVE_NAMED_PARAM(benchmarkGet, i32, int32_t(0));
-BENCHMARK_NAMED_PARAM(benchmarkGet, u64, uint64_t(0));
-BENCHMARK_RELATIVE_NAMED_PARAM(benchmarkGet, i64, int64_t(0));
+BENCHMARK_NAMED_PARAM(benchmarkGet, u16, uint16_t(0))
+BENCHMARK_RELATIVE_NAMED_PARAM(benchmarkGet, i16, int16_t(0))
+BENCHMARK_NAMED_PARAM(benchmarkGet, u32, uint32_t(0))
+BENCHMARK_RELATIVE_NAMED_PARAM(benchmarkGet, i32, int32_t(0))
+BENCHMARK_NAMED_PARAM(benchmarkGet, u64, uint64_t(0))
+BENCHMARK_RELATIVE_NAMED_PARAM(benchmarkGet, i64, int64_t(0))
 
 #if 0
 ============================================================================
@@ -110,7 +115,7 @@ benchmarkGet(i64)                                 85.78%     8.53ns  117.16M
 ============================================================================
 #endif
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   folly::runBenchmarks();
   return sum.load();

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <functional>
@@ -29,14 +30,17 @@
 #include <folly/Executor.h>
 #include <folly/IntrusiveList.h>
 #include <folly/Likely.h>
+#include <folly/Portability.h>
 #include <folly/Try.h>
+#include <folly/functional/Invoke.h>
+#include <folly/io/async/HHWheelTimer.h>
 #include <folly/io/async/Request.h>
 
 #include <folly/experimental/ExecutionObserver.h>
 #include <folly/fibers/BoostContextCompatibility.h>
 #include <folly/fibers/Fiber.h>
 #include <folly/fibers/GuardPageAllocator.h>
-#include <folly/fibers/TimeoutController.h>
+#include <folly/fibers/LoopController.h>
 #include <folly/fibers/traits.h>
 
 namespace folly {
@@ -48,8 +52,8 @@ namespace fibers {
 
 class Baton;
 class Fiber;
-class LoopController;
-class TimeoutController;
+
+struct TaskOptions;
 
 template <typename T>
 class LocalType {};
@@ -85,6 +89,20 @@ class FiberManager : public ::folly::Executor {
     size_t stackSize{kDefaultStackSize};
 
     /**
+     * Sanitizers need a lot of extra stack space. Benchmarks results at
+     * https://www.usenix.org/system/files/conference/atc12/atc12-final39.pdf,
+     * table 2, show that average stack increase with ASAN is 10% and extreme is
+     * 306%. Setting to 400% as "works for majority of clients" setting. If
+     * stack data layout of the service leads to even higher ASAN memory
+     * overhead, those services can tune their fiber stack sizes further.
+     *
+     * Even in the absence of ASAN, debug builds still need extra stack space
+     * due to reduced inlining.
+     *
+     */
+    size_t stackSizeMultiplier{kIsSanitize ? 4 : (kIsDebug ? 2 : 1)};
+
+    /**
      * Record exact amount of stack used.
      *
      * This is fairly expensive: we fill each newly allocated stack
@@ -102,9 +120,9 @@ class FiberManager : public ::folly::Executor {
     size_t maxFibersPoolSize{1000};
 
     /**
-     * Protect limited amount of fiber stacks with guard pages.
+     * Protect a small number of fiber stacks with this many guard pages.
      */
-    bool useGuardPages{true};
+    size_t guardPagesPerStack{1};
 
     /**
      * Free unnecessary fibers in the fibers pool every fibersPoolResizePeriodMs
@@ -114,6 +132,33 @@ class FiberManager : public ::folly::Executor {
     uint32_t fibersPoolResizePeriodMs{0};
 
     constexpr Options() {}
+
+    auto hash() const {
+      return std::make_tuple(
+          stackSize,
+          stackSizeMultiplier,
+          recordStackEvery,
+          maxFibersPoolSize,
+          guardPagesPerStack,
+          fibersPoolResizePeriodMs);
+    }
+  };
+
+  /**
+   * A (const) Options instance with a dedicated unique identifier,
+   * which is used as a key in FiberManagerMap.
+   * This is relevant if you want to run different FiberManager,
+   * with different Option, on the same EventBase.
+   */
+  struct FrozenOptions {
+    explicit FrozenOptions(Options opts)
+        : options(std::move(opts)), token(create(options)) {}
+
+    const Options options;
+    const ssize_t token;
+
+   private:
+    static ssize_t create(const Options&);
   };
 
   using ExceptionCallback =
@@ -125,7 +170,7 @@ class FiberManager : public ::folly::Executor {
   /**
    * Initializes, but doesn't start FiberManager loop
    *
-   * @param loopController
+   * @param loopController A LoopController object
    * @param options FiberManager options
    */
   explicit FiberManager(
@@ -135,7 +180,7 @@ class FiberManager : public ::folly::Executor {
   /**
    * Initializes, but doesn't start FiberManager loop
    *
-   * @param loopController
+   * @param loopController A LoopController object
    * @param options FiberManager options
    * @tparam LocalT only local of this type may be stored on fibers.
    *                Locals of other types will be considered thread-locals.
@@ -165,15 +210,38 @@ class FiberManager : public ::folly::Executor {
   void loopUntilNoReadyImpl();
 
   /**
+   * This should only be called by a LoopController.
+   */
+  void runEagerFiberImpl(Fiber*);
+
+  /**
+   * This should only be called by a LoopController.
+   */
+  bool shouldRunLoopRemote();
+
+  /**
    * @return true if there are outstanding tasks.
    */
   bool hasTasks() const;
+  bool isRemoteScheduled() const;
+
+  /**
+   * @return The number of currently active fibers (ready to run or blocked).
+   * Does not include the number of remotely enqueued tasks that have not been
+   * run yet.
+   */
+  size_t numActiveTasks() const noexcept { return fibersActive_; }
+
+  /**
+   * @return true if there are tasks ready to run.
+   */
+  bool hasReadyTasks() const;
 
   /**
    * Sets exception callback which will be called if any of the tasks throws an
    * exception.
    *
-   * @param ec
+   * @param ec An ExceptionCallback object.
    */
   void setExceptionCallback(ExceptionCallback ec);
 
@@ -182,9 +250,10 @@ class FiberManager : public ::folly::Executor {
    *
    * @param func Task functor; must have a signature of `void func()`.
    *             The object will be destroyed once task execution is complete.
+   * @param taskOptions Task specific configs.
    */
   template <typename F>
-  void addTask(F&& func);
+  void addTask(F&& func, TaskOptions taskOptions = TaskOptions());
 
   /**
    * Add a new task to be executed and return a future that will be set on
@@ -194,8 +263,33 @@ class FiberManager : public ::folly::Executor {
    *             The object will be destroyed once task execution is complete.
    */
   template <typename F>
-  auto addTaskFuture(F&& func) -> folly::Future<
-      typename folly::Unit::Lift<typename std::result_of<F()>::type>::type>;
+  auto addTaskFuture(F&& func)
+      -> folly::Future<folly::lift_unit_t<invoke_result_t<F>>>;
+
+  /**
+   * Add a new task to be executed. Must be called from FiberManager's thread.
+   * The new task is run eagerly. addTaskEager will return only once the new
+   * task reaches its first suspension point or is completed.
+   *
+   * @param func Task functor; must have a signature of `void func()`.
+   *             The object will be destroyed once task execution is complete.
+   */
+  template <typename F>
+  void addTaskEager(F&& func);
+
+  /**
+   * Add a new task to be executed and return a future that will be set on
+   * return from func. Must be called from FiberManager's thread.
+   * The new task is run eagerly. addTaskEager will return only once the new
+   * task reaches its first suspension point or is completed.
+   *
+   * @param func Task functor; must have a signature of `void func()`.
+   *             The object will be destroyed once task execution is complete.
+   */
+  template <typename F>
+  auto addTaskEagerFuture(F&& func)
+      -> folly::Future<folly::lift_unit_t<invoke_result_t<F>>>;
+
   /**
    * Add a new task to be executed. Safe to call from other threads.
    *
@@ -213,13 +307,11 @@ class FiberManager : public ::folly::Executor {
    *             The object will be destroyed once task execution is complete.
    */
   template <typename F>
-  auto addTaskRemoteFuture(F&& func) -> folly::Future<
-      typename folly::Unit::Lift<typename std::result_of<F()>::type>::type>;
+  auto addTaskRemoteFuture(F&& func)
+      -> folly::Future<folly::lift_unit_t<invoke_result_t<F>>>;
 
   // Executor interface calls addTaskRemote
-  void add(folly::Func f) override {
-    addTaskRemote(std::move(f));
-  }
+  void add(folly::Func f) override { addTaskRemote(std::move(f)); }
 
   /**
    * Add a new task. When the task is complete, execute finally(Try<Result>&&)
@@ -234,6 +326,20 @@ class FiberManager : public ::folly::Executor {
   void addTaskFinally(F&& func, G&& finally);
 
   /**
+   * Add a new task. When the task is complete, execute finally(Try<Result>&&)
+   * on the main context.
+   * The new task is run eagerly. addTaskEager will return only once the new
+   * task reaches its first suspension point or is completed.
+   *
+   * @param func Task functor; must have a signature of `T func()` for some T.
+   * @param finally Finally functor; must have a signature of
+   *                `void finally(Try<T>&&)` and will be passed
+   *                the result of func() (including the exception if occurred).
+   */
+  template <typename F, typename G>
+  void addTaskFinallyEager(F&& func, G&& finally);
+
+  /**
    * If called from a fiber, immediately switches to the FiberManager's context
    * and runs func(), going back to the Fiber's context after completion.
    * Outside a fiber, just calls func() directly.
@@ -241,7 +347,7 @@ class FiberManager : public ::folly::Executor {
    * @return value returned by func().
    */
   template <typename F>
-  typename std::result_of<F()>::type runInMainContext(F&& func);
+  invoke_result_t<F> runInMainContext(F&& func);
 
   /**
    * Returns a refference to a fiber-local context for given Fiber. Should be
@@ -268,16 +374,22 @@ class FiberManager : public ::folly::Executor {
   size_t fibersPoolSize() const;
 
   /**
-   * return     true if running activeFiber_ is not nullptr.
+   * @return true if running activeFiber_ is not nullptr.
    */
   bool hasActiveFiber() const;
 
   /**
+   * @return How long has the currently running task on the fiber ran, in
+   * terms of wallclock time. This excludes the time spent in preempted or
+   * waiting stages. This only works if TaskOptions.logRunningTime is true
+   * during addTask().
+   */
+  folly::Optional<std::chrono::nanoseconds> getCurrentTaskRunningTime() const;
+
+  /**
    * @return The currently running fiber or null if no fiber is executing.
    */
-  Fiber* currentFiber() const {
-    return currentFiber_;
-  }
+  Fiber* currentFiber() const { return currentFiber_; }
 
   /**
    * @return What was the most observed fiber stack usage (in bytes).
@@ -316,11 +428,13 @@ class FiberManager : public ::folly::Executor {
    * not include fibers or tasks scheduled remotely).
    */
   size_t runQueueSize() const {
-    return readyFibers_.size() + yieldedFibers_.size();
+    return readyFibers_.size() + (yieldedFibers_ ? yieldedFibers_->size() : 0);
   }
 
   static FiberManager& getFiberManager();
   static FiberManager* getFiberManagerUnsafe();
+
+  const Options& getOptions() const { return options_; }
 
  private:
   friend class Baton;
@@ -345,8 +459,21 @@ class FiberManager : public ::folly::Executor {
     AtomicIntrusiveLinkedListHook<RemoteTask> nextRemoteTask;
   };
 
+  template <typename F>
+  Fiber* createTask(F&& func, TaskOptions taskOptions);
+
+  template <typename F, typename G>
+  Fiber* createTaskFinally(F&& func, G&& finally);
+
+  void runEagerFiber(Fiber* fiber);
+
   void activateFiber(Fiber* fiber);
   void deactivateFiber(Fiber* fiber);
+
+  template <typename LoopFunc>
+  void runFibersHelper(LoopFunc&& loopFunc);
+
+  size_t recordStackPosition(size_t position);
 
   typedef folly::IntrusiveList<Fiber, &Fiber::listHook_> FiberTailQueue;
   typedef folly::IntrusiveList<Fiber, &Fiber::globalListHook_>
@@ -360,14 +487,16 @@ class FiberManager : public ::folly::Executor {
   Fiber* currentFiber_{nullptr};
 
   FiberTailQueue readyFibers_; /**< queue of fibers ready to be executed */
-  FiberTailQueue yieldedFibers_; /**< queue of fibers which have yielded
-                                      execution */
+  FiberTailQueue* yieldedFibers_{nullptr}; /**< queue of fibers which have
+                                      yielded execution */
   FiberTailQueue fibersPool_; /**< pool of uninitialized Fiber objects */
 
   GlobalFiberTailQueue allFibers_; /**< list of all Fiber objects owned */
 
-  size_t fibersAllocated_{0}; /**< total number of fibers allocated */
-  size_t fibersPoolSize_{0}; /**< total number of fibers in the free pool */
+  // total number of fibers allocated
+  std::atomic<size_t> fibersAllocated_{0};
+  // total number of fibers in the free pool
+  std::atomic<size_t> fibersPoolSize_{0};
   size_t fibersActive_{0}; /**< number of running or blocked fibers */
   size_t fiberId_{0}; /**< id of last fiber used */
 
@@ -384,7 +513,7 @@ class FiberManager : public ::folly::Executor {
    * When we are inside FiberManager loop this points to FiberManager. Otherwise
    * it's nullptr
    */
-  static FOLLY_TLS FiberManager* currentFiberManager_;
+  static FiberManager*& getCurrentFiberManager();
 
   /**
    * Allocator used to allocate stack for Fibers in the pool.
@@ -397,7 +526,7 @@ class FiberManager : public ::folly::Executor {
   /**
    * Largest observed individual Fiber stack usage in bytes.
    */
-  size_t stackHighWatermark_{0};
+  std::atomic<size_t> stackHighWatermark_{0};
 
   /**
    * Schedules a loop with loopController (unless already scheduled before).
@@ -442,14 +571,26 @@ class FiberManager : public ::folly::Executor {
   folly::AtomicIntrusiveLinkedList<RemoteTask, &RemoteTask::nextRemoteTask>
       remoteTaskQueue_;
 
-  std::shared_ptr<TimeoutController> timeoutManager_;
+  ssize_t remoteCount_{0};
 
-  struct FibersPoolResizer {
+  /**
+   * Number of uncaught exceptions when FiberManager loop was called.
+   */
+  ssize_t numUncaughtExceptions_{0};
+  /**
+   * Current exception when FiberManager loop was called.
+   */
+  std::exception_ptr currentException_;
+
+  class FibersPoolResizer final : private HHWheelTimer::Callback {
+   public:
     explicit FibersPoolResizer(FiberManager& fm) : fiberManager_(fm) {}
-    void operator()();
+    void run();
 
    private:
     FiberManager& fiberManager_;
+    void timeoutExpired() noexcept override { run(); }
+    void callbackCanceled() noexcept override {}
   };
 
   FibersPoolResizer fibersPoolResizer_;
@@ -465,29 +606,18 @@ class FiberManager : public ::folly::Executor {
   void runReadyFiber(Fiber* fiber);
   void remoteReadyInsert(Fiber* fiber);
 
-#ifdef FOLLY_SANITIZE_ADDRESS
-
   // These methods notify ASAN when a fiber is entered/exited so that ASAN can
   // find the right stack extents when it needs to poison/unpoison the stack.
-
   void registerStartSwitchStackWithAsan(
-      void** saveFakeStack,
-      const void* stackBase,
-      size_t stackSize);
+      void** saveFakeStack, const void* stackBase, size_t stackSize);
   void registerFinishSwitchStackWithAsan(
-      void* fakeStack,
-      const void** saveStackBase,
-      size_t* saveStackSize);
+      void* fakeStack, const void** saveStackBase, size_t* saveStackSize);
   void freeFakeStack(void* fakeStack);
   void unpoisonFiberStack(const Fiber* fiber);
 
-#endif // FOLLY_SANITIZE_ADDRESS
-
-#ifndef _WIN32
   bool alternateSignalStackRegistered_{false};
 
-  void registerAlternateSignalStack();
-#endif
+  void maybeRegisterAlternateSignalStack();
 };
 
 /**
@@ -509,6 +639,11 @@ inline void addTask(F&& func) {
   return FiberManager::getFiberManager().addTask(std::forward<F>(func));
 }
 
+template <typename F>
+inline void addTaskEager(F&& func) {
+  return FiberManager::getFiberManager().addTaskEager(std::forward<F>(func));
+}
+
 /**
  * Add a new task. When the task is complete, execute finally(Try<Result>&&)
  * on the main context.
@@ -526,6 +661,12 @@ inline void addTaskFinally(F&& func, G&& finally) {
       std::forward<F>(func), std::forward<G>(finally));
 }
 
+template <typename F, typename G>
+inline void addTaskFinallyEager(F&& func, G&& finally) {
+  return FiberManager::getFiberManager().addTaskFinallyEager(
+      std::forward<F>(func), std::forward<G>(finally));
+}
+
 /**
  * Blocks task execution until given promise is fulfilled.
  *
@@ -534,7 +675,13 @@ inline void addTaskFinally(F&& func, G&& finally) {
  * @return data which was used to fulfill the promise.
  */
 template <typename F>
-typename FirstArgOf<F>::type::value_type inline await(F&& func);
+typename FirstArgOf<F>::type::value_type inline await_async(F&& func);
+#if !defined(_MSC_VER)
+template <typename F>
+FOLLY_ERASE typename FirstArgOf<F>::type::value_type await(F&& func) {
+  return await_async(static_cast<F&&>(func));
+}
+#endif
 
 /**
  * If called from a fiber, immediately switches to the FiberManager's context
@@ -544,13 +691,7 @@ typename FirstArgOf<F>::type::value_type inline await(F&& func);
  * @return value returned by func().
  */
 template <typename F>
-typename std::result_of<F()>::type inline runInMainContext(F&& func) {
-  auto fm = FiberManager::getFiberManagerUnsafe();
-  if (UNLIKELY(fm == nullptr)) {
-    return func();
-  }
-  return fm->runInMainContext(std::forward<F>(func));
-}
+invoke_result_t<F> inline runInMainContext(F&& func);
 
 /**
  * Returns a refference to a fiber-local context for given Fiber. Should be
@@ -576,7 +717,7 @@ inline void yield() {
     std::this_thread::yield();
   }
 }
-}
-}
+} // namespace fibers
+} // namespace folly
 
 #include <folly/fibers/FiberManagerInternal-inl.h>

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,8 +19,8 @@
 #include <memory>
 #include <thread>
 
-#include <folly/Baton.h>
 #include <folly/io/async/EventBase.h>
+#include <folly/synchronization/Baton.h>
 
 namespace folly {
 
@@ -36,22 +36,33 @@ typedef Range<const char*> StringPiece;
  * When the ScopedEventBaseThread object is destroyed, the thread will be
  * stopped.
  */
-class ScopedEventBaseThread {
+class ScopedEventBaseThread : public IOExecutor, public SequencedExecutor {
  public:
   ScopedEventBaseThread();
-  explicit ScopedEventBaseThread(const StringPiece& name);
+  explicit ScopedEventBaseThread(StringPiece name);
   explicit ScopedEventBaseThread(EventBaseManager* ebm);
-  explicit ScopedEventBaseThread(
+  explicit ScopedEventBaseThread(EventBaseManager* ebm, StringPiece name);
+  ScopedEventBaseThread(
+      EventBase::Options eventBaseOptions,
       EventBaseManager* ebm,
-      const StringPiece& name);
-  ~ScopedEventBaseThread();
+      StringPiece name);
+  ~ScopedEventBaseThread() override;
 
-  EventBase* getEventBase() const {
-    return &eb_;
+  EventBase* getEventBase() const { return &eb_; }
+
+  EventBase* getEventBase() override { return &eb_; }
+
+  std::thread::id getThreadId() const { return th_.get_id(); }
+
+  void add(Func func) override { getEventBase()->add(std::move(func)); }
+
+ protected:
+  bool keepAliveAcquire() noexcept override {
+    return getEventBase()->keepAliveAcquire();
   }
 
-  std::thread::id getThreadId() const {
-    return th_.get_id();
+  void keepAliveRelease() noexcept override {
+    getEventBase()->keepAliveRelease();
   }
 
  private:
@@ -69,4 +80,4 @@ class ScopedEventBaseThread {
   folly::Baton<> stop_;
 };
 
-}
+} // namespace folly

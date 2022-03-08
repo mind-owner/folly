@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,15 +19,19 @@
 #include <iosfwd>
 #include <unordered_map>
 
-#include <folly/RWSpinLock.h>
 #include <folly/Range.h>
-#include <folly/SpookyHashV2.h>
 #include <folly/Synchronized.h>
 #include <folly/ThreadLocal.h>
+#include <folly/hash/SpookyHashV2.h>
+#include <folly/synchronization/RWSpinLock.h>
 
 #include <folly/experimental/exception_tracer/ExceptionTracerLib.h>
 #include <folly/experimental/exception_tracer/StackTrace.h>
 #include <folly/experimental/symbolizer/Symbolizer.h>
+
+#if FOLLY_HAVE_ELF && FOLLY_HAVE_DWARF
+
+#if defined(__GLIBCXX__)
 
 using namespace folly::exception_tracer;
 
@@ -43,7 +47,7 @@ using ExceptionStatsHolderType =
 struct ExceptionStatsStorage {
   void appendTo(ExceptionStatsHolderType& data) {
     ExceptionStatsHolderType tempHolder;
-    statsHolder->swap(tempHolder);
+    statsHolder.wlock()->swap(tempHolder);
 
     for (const auto& myData : tempHolder) {
       auto inserted = data.insert(myData);
@@ -77,11 +81,12 @@ std::vector<ExceptionStats> getExceptionStatistics() {
     result.push_back(std::move(item.second));
   }
 
-  std::sort(result.begin(),
-            result.end(),
-            [](const ExceptionStats& lhs, const ExceptionStats& rhs) {
-              return lhs.count > rhs.count;
-            });
+  std::sort(
+      result.begin(),
+      result.end(),
+      [](const ExceptionStats& lhs, const ExceptionStats& rhs) {
+        return lhs.count > rhs.count;
+      });
 
   return result;
 }
@@ -103,7 +108,7 @@ namespace {
  * This handler gathers statistics on all exceptions thrown by the program
  * Information is being stored in thread local storage.
  */
-void throwHandler(void*, std::type_info* exType, void (*)(void*)) noexcept {
+void throwHandler(void*, std::type_info* exType, void (**)(void*)) noexcept {
   // This array contains the exception type and the stack frame
   // pointers so they get all hashed together.
   uintptr_t frames[kMaxFrames + 1];
@@ -119,7 +124,7 @@ void throwHandler(void*, std::type_info* exType, void (*)(void*)) noexcept {
   auto exceptionId =
       folly::hash::SpookyHashV2::Hash64(frames, (n + 1) * sizeof(frames[0]), 0);
 
-  SYNCHRONIZED(holder, gExceptionStats->statsHolder) {
+  gExceptionStats->statsHolder.withWLock([&](auto& holder) {
     auto it = holder.find(exceptionId);
     if (it != holder.end()) {
       ++it->second.count;
@@ -129,7 +134,7 @@ void throwHandler(void*, std::type_info* exType, void (*)(void*)) noexcept {
       info.frames.assign(frames + 1, frames + 1 + n);
       holder.emplace(exceptionId, ExceptionStats{1, std::move(info)});
     }
-  }
+  });
 }
 
 struct Initializer {
@@ -139,3 +144,7 @@ struct Initializer {
 Initializer initializer;
 
 } // namespace
+
+#endif // defined(__GLIBCXX__)
+
+#endif // FOLLY_HAVE_ELF && FOLLY_HAVE_DWARF

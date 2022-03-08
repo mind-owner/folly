@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,59 +15,78 @@
  */
 
 #include <folly/io/async/EventBaseLocal.h>
-#include <folly/MapUtil.h>
+
 #include <atomic>
 #include <thread>
 
-namespace folly { namespace detail {
+#include <folly/MapUtil.h>
+#include <folly/Memory.h>
+
+namespace folly {
+namespace detail {
 
 EventBaseLocalBase::~EventBaseLocalBase() {
-  for (auto* evb : *eventBases_.rlock()) {
-    evb->runInEventBaseThread([ this, evb, key = key_ ] {
-      evb->localStorage_.erase(key);
-      evb->localStorageToDtor_.erase(this);
-    });
+  // Remove self from all registered EventBase instances.
+  // Notice that we could be racing with EventBase dtor similarly
+  // deregistering itself from all registered EventBaseLocal instances. Because
+  // both sides need to acquire two locks, but in inverse order, we retry if
+  // inner lock acquisition fails to prevent lock inversion deadlock.
+  while (true) {
+    auto locked = eventBases_.wlock();
+    if (locked->empty()) {
+      break;
+    }
+    auto* evb = *locked->begin();
+    if (evb->tryDeregister(*this)) {
+      locked->erase(evb);
+    }
   }
 }
 
 void* EventBaseLocalBase::getVoid(EventBase& evb) {
   evb.dcheckIsInEventBaseThread();
 
-  return folly::get_default(evb.localStorage_, key_, {}).get();
+  auto ptr = folly::get_ptr(evb.localStorage_, key_);
+  return ptr ? ptr->get() : nullptr;
 }
 
 void EventBaseLocalBase::erase(EventBase& evb) {
   evb.dcheckIsInEventBaseThread();
 
   evb.localStorage_.erase(key_);
-  evb.localStorageToDtor_.erase(this);
+  evb.localStorageToDtor_.wlock()->erase(this);
 
-  SYNCHRONIZED(eventBases_) {
-    eventBases_.erase(&evb);
-  }
+  eventBases_.wlock()->erase(&evb);
 }
 
-void EventBaseLocalBase::onEventBaseDestruction(EventBase& evb) {
+bool EventBaseLocalBase::tryDeregister(EventBase& evb) {
   evb.dcheckIsInEventBaseThread();
 
-  SYNCHRONIZED(eventBases_) {
-    eventBases_.erase(&evb);
+  if (auto locked = eventBases_.tryWLock()) {
+    locked->erase(&evb);
+    return true;
   }
+  return false;
 }
 
-void EventBaseLocalBase::setVoid(EventBase& evb, std::shared_ptr<void>&& ptr) {
+void EventBaseLocalBase::setVoid(
+    EventBase& evb, void* ptr, void (*dtor)(void*)) {
+  // construct the unique-ptr eagerly, just in case anything between this and
+  // the emplace below could throw
+  auto erased = erased_unique_ptr{ptr, dtor};
+
   evb.dcheckIsInEventBaseThread();
 
-  auto alreadyExists =
-    evb.localStorage_.find(key_) != evb.localStorage_.end();
+  auto alreadyExists = evb.localStorage_.find(key_) != evb.localStorage_.end();
 
-  evb.localStorage_.emplace(key_, std::move(ptr));
+  evb.localStorage_.emplace(key_, std::move(erased));
 
   if (!alreadyExists) {
     eventBases_.wlock()->insert(&evb);
-    evb.localStorageToDtor_.insert(this);
+    evb.localStorageToDtor_.wlock()->insert(this);
   }
 }
 
-std::atomic<uint64_t> EventBaseLocalBase::keyCounter_{0};
-}}
+std::atomic<std::size_t> EventBaseLocalBase::keyCounter_{0};
+} // namespace detail
+} // namespace folly

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,10 +16,11 @@
 
 #include <folly/io/IOBufQueue.h>
 
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
-#include <string.h>
 
+#include <fmt/format.h>
 #include <folly/Range.h>
 #include <folly/portability/GTest.h>
 
@@ -37,14 +38,13 @@ namespace {
 
 IOBufQueue::Options clOptions;
 struct Initializer {
-  Initializer() {
-    clOptions.cacheChainLength = true;
-  }
+  Initializer() { clOptions.cacheChainLength = true; }
 };
 Initializer initializer;
 
-unique_ptr<IOBuf> stringToIOBuf(const char* s, size_t len) {
-  unique_ptr<IOBuf> buf = IOBuf::create(len);
+unique_ptr<IOBuf> stringToIOBuf(
+    const char* s, size_t len, size_t tailroom = 0) {
+  unique_ptr<IOBuf> buf = IOBuf::create(len + tailroom);
   memcpy(buf->writableTail(), s, len);
   buf->append(len);
   return buf;
@@ -57,7 +57,13 @@ void checkConsistency(const IOBufQueue& queue) {
   }
 }
 
+std::string queueToString(const IOBufQueue& queue) {
+  std::string out;
+  queue.appendToString(out);
+  return out;
 }
+
+} // namespace
 
 TEST(IOBufQueue, Simple) {
   IOBufQueue queue(clOptions);
@@ -120,6 +126,89 @@ TEST(IOBufQueue, AppendStringPiece) {
   EXPECT_EQ(0, memcmp(chain->data(), chain2->data(), s.length()));
 }
 
+TEST(IOBufQueue, Reset) {
+  IOBufQueue queue(clOptions);
+  queue.preallocate(8, 8);
+  queue.append(SCL("Hello "));
+  queue.preallocate(128, 128);
+  queue.append(SCL("World"));
+  EXPECT_EQ(2, queue.front()->countChainElements());
+  queue.reset();
+  EXPECT_EQ(queue.front(), nullptr);
+  checkConsistency(queue);
+}
+
+TEST(IOBufQueue, ClearAndTryReuseLargestBuffer) {
+  IOBufQueue queue(clOptions);
+  queue.preallocate(8, 8);
+  queue.append(SCL("Hello "));
+
+  // Separate allocation sizes enough that, if they're internally rounded up,
+  // all the buffers have different capacities.
+  queue.preallocate(128, 128);
+  queue.append(SCL("World "));
+  // The current tail will be kept.
+  const IOBuf* kept = queue.front()->prev();
+
+  // The new tail is larger but cannot be reused because it's shared.
+  queue.preallocate(256, 256);
+  queue.append(SCL("abc"));
+  const auto shared = queue.front()->prev()->cloneOne();
+  EXPECT_EQ(3, queue.front()->countChainElements());
+
+  queue.clearAndTryReuseLargestBuffer();
+  ASSERT_TRUE(queue.front());
+  EXPECT_TRUE(queue.empty());
+  // Only the largest non-shared buffer is kept.
+  EXPECT_EQ(1, queue.front()->countChainElements());
+  ASSERT_EQ(kept, queue.front());
+  checkConsistency(queue);
+}
+
+TEST(IOBufQueue, AppendIOBufRef) {
+  IOBufQueue queue(clOptions);
+  queue.append(*stringToIOBuf("abc", 3), true);
+  EXPECT_EQ(3, queue.chainLength());
+  EXPECT_EQ(1, queue.front()->countChainElements());
+  EXPECT_EQ("abc", queueToString(queue));
+  // Make sure we have enough space to copy over next data.
+  queue.preallocate(10, 10, 10);
+  EXPECT_LE(10, queue.tailroom());
+  auto numElements = queue.front()->countChainElements();
+  queue.append(*stringToIOBuf("FooBar", 6), true);
+  EXPECT_EQ(9, queue.chainLength());
+  // Make sure that we performed copy and not append chain.
+  EXPECT_EQ(numElements, queue.front()->countChainElements());
+  EXPECT_EQ("abcFooBar", queueToString(queue));
+}
+
+TEST(IOBufQueue, AppendIOBufRefChain) {
+  IOBufQueue queue(clOptions);
+  queue.append(*stringToIOBuf("abc", 3), true);
+  queue.preallocate(10, 10, 10);
+  auto numElements = queue.front()->countChainElements();
+  auto chain = stringToIOBuf("Hello", 5);
+  chain->prependChain(stringToIOBuf("World", 5));
+  queue.append(*chain, true);
+  // Make sure that we performed a copy and not append chain.
+  EXPECT_EQ(numElements, queue.front()->countChainElements());
+  EXPECT_EQ("abcHelloWorld", queueToString(queue));
+}
+
+TEST(IOBufQueue, AppendIOBufRefChainPartial) {
+  IOBufQueue queue(clOptions);
+  queue.append(*stringToIOBuf("abc", 3), true);
+  queue.preallocate(16, 16, 16);
+  auto numElements = queue.front()->countChainElements();
+  auto chain = stringToIOBuf("This fits in 16B", 16);
+  chain->prependChain(stringToIOBuf("Hello ", 5));
+  chain->prependChain(stringToIOBuf("World", 5));
+  queue.append(*chain, true);
+  // Make sure that we performed a copy of first IOBuf and cloned the rest.
+  EXPECT_EQ(numElements + 2, queue.front()->countChainElements());
+  EXPECT_EQ("abcThis fits in 16BHelloWorld", queueToString(queue));
+}
+
 TEST(IOBufQueue, Split) {
   IOBufQueue queue(clOptions);
   queue.append(stringToIOBuf(SCL("Hello")));
@@ -154,7 +243,7 @@ TEST(IOBufQueue, Split) {
   queue.append(stringToIOBuf(SCL("Hello,")));
   queue.append(stringToIOBuf(SCL(" World")));
   checkConsistency(queue);
-  EXPECT_THROW({prefix = queue.split(13);}, std::underflow_error);
+  EXPECT_THROW({ prefix = queue.split(13); }, std::underflow_error);
   checkConsistency(queue);
 }
 
@@ -177,7 +266,7 @@ TEST(IOBufQueue, SplitZero) {
 TEST(IOBufQueue, Preallocate) {
   IOBufQueue queue(clOptions);
   queue.append(string("Hello"));
-  pair<void*, uint64_t> writable = queue.preallocate(2, 64, 64);
+  pair<void*, std::size_t> writable = queue.preallocate(2, 64, 64);
   checkConsistency(queue);
   EXPECT_NE((void*)nullptr, writable.first);
   EXPECT_LE(2, writable.second);
@@ -212,9 +301,9 @@ TEST(IOBufQueue, Wrap) {
   EXPECT_EQ((len - 1) / 6 + 1, iob->countChainElements());
   iob->unshare();
   iob->coalesce();
-  EXPECT_EQ(StringPiece(buf),
-            StringPiece(reinterpret_cast<const char*>(iob->data()),
-                        iob->length()));
+  EXPECT_EQ(
+      StringPiece(buf),
+      StringPiece(reinterpret_cast<const char*>(iob->data()), iob->length()));
 }
 
 TEST(IOBufQueue, Trim) {
@@ -417,36 +506,30 @@ TEST(IOBufQueue, Prepend) {
 
   auto out = queue.move();
   out->coalesce();
-  EXPECT_EQ("Hello World",
-            StringPiece(reinterpret_cast<const char*>(out->data()),
-                        out->length()));
+  EXPECT_EQ(
+      "Hello World",
+      StringPiece(reinterpret_cast<const char*>(out->data()), out->length()));
 }
 
 TEST(IOBufQueue, PopFirst) {
   IOBufQueue queue(IOBufQueue::cacheChainLength());
-  const char * strings[] = {
-    "Hello",
-    ",",
-    " ",
-    "",
-    "World"
-  };
+  const char* strings[] = {"Hello", ",", " ", "", "World"};
 
-  const size_t numStrings=sizeof(strings)/sizeof(*strings);
+  const size_t numStrings = sizeof(strings) / sizeof(*strings);
   size_t chainLength = 0;
-  for(size_t i = 0; i < numStrings; ++i) {
+  for (size_t i = 0; i < numStrings; ++i) {
     queue.append(stringToIOBuf(strings[i], strlen(strings[i])));
     checkConsistency(queue);
     chainLength += strlen(strings[i]);
   }
 
   unique_ptr<IOBuf> first;
-  for(size_t i = 0; i < numStrings; ++i) {
+  for (size_t i = 0; i < numStrings; ++i) {
     checkConsistency(queue);
     EXPECT_EQ(chainLength, queue.front()->computeChainDataLength());
     EXPECT_EQ(chainLength, queue.chainLength());
     first = queue.pop_front();
-    chainLength-=strlen(strings[i]);
+    chainLength -= strlen(strings[i]);
     EXPECT_EQ(strlen(strings[i]), first->computeChainDataLength());
   }
   checkConsistency(queue);
@@ -484,4 +567,88 @@ TEST(IOBufQueue, Gather) {
       reinterpret_cast<const char*>(queue.front()->data()),
       queue.front()->length());
   EXPECT_EQ("hello world", s);
+}
+
+TEST(IOBufQueue, ReuseTail) {
+  const auto test = [](bool asValue, bool withEmptyHead) {
+    SCOPED_TRACE(
+        fmt::format("asValue={}, withEmptyHead={}", asValue, withEmptyHead));
+
+    IOBufQueue queue;
+    IOBufQueue::WritableRangeCache cache(&queue);
+
+    constexpr size_t kInitialCapacity = 1024;
+    queue.preallocate(kInitialCapacity, kInitialCapacity);
+    size_t expectedCapacity = queue.front()->capacity();
+
+    const auto makeUnpackable = [] {
+      auto unpackable = IOBuf::create(IOBufQueue::kMaxPackCopy + 1);
+      unpackable->append(IOBufQueue::kMaxPackCopy + 1);
+      return unpackable;
+    };
+
+    auto unpackable = makeUnpackable();
+    expectedCapacity += unpackable->capacity();
+
+    std::unique_ptr<IOBuf> buf;
+    size_t packableLength = 0;
+    if (withEmptyHead) {
+      // In this case, the unpackable buffer should just shift the empty head
+      // buffer forward.
+      buf = std::move(unpackable);
+    } else {
+      queue.append("hello ");
+      buf = stringToIOBuf(SCL("world"));
+      packableLength = buf->length();
+      buf->insertAfterThisOne(std::move(unpackable));
+    }
+
+    const auto oldTail = reinterpret_cast<uint8_t*>(queue.writableTail());
+    const auto oldTailroom = queue.tailroom();
+
+    // Append two buffers in a row to verify that the reused tail gets pushed
+    // forward without wrapping.
+    for (size_t i = 0; i < 2; ++i) {
+      SCOPED_TRACE(fmt::format("i={}", i));
+
+      if (asValue) {
+        queue.append(
+            std::move(buf), /* pack */ true, /* allowTailReuse */ true);
+      } else {
+        queue.append(*buf, /* pack */ true, /* allowTailReuse */ true);
+      }
+
+      // We should be able to avoid allocating new memory because we still had
+      // room in the old tail, even after packing the first IOBuf.
+      EXPECT_EQ(queue.writableTail(), oldTail + packableLength);
+      EXPECT_EQ(queue.tailroom(), oldTailroom - packableLength);
+      EXPECT_EQ(queue.front()->computeChainCapacity(), expectedCapacity);
+      EXPECT_EQ(
+          queue.front()->countChainElements(), i + (withEmptyHead ? 2 : 3));
+
+      if (i == 0) {
+        buf = makeUnpackable();
+        expectedCapacity += buf->capacity();
+      }
+    }
+  };
+
+  // Test both unique_ptr and value overloads, and check that an empty head is
+  // handled correctly.
+  for (bool asValue : {false, true}) {
+    for (bool withEmptyHead : {false, true}) {
+      test(asValue, withEmptyHead);
+    }
+  }
+}
+
+TEST(IOBufQueue, PackWithSharedTail) {
+  auto buf = stringToIOBuf("Hello ", 6, 10);
+  IOBufQueue queue;
+  queue.append(buf->clone());
+  *buf->writableTail() = 'X';
+  buf->append(1);
+  queue.append(stringToIOBuf("world", 5), /* pack */ true);
+  // buf is shared, packing should not modify it.
+  EXPECT_EQ(buf->data()[6], 'X');
 }

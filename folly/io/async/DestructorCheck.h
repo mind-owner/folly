@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 namespace folly {
@@ -56,15 +57,13 @@ namespace folly {
 
 class DestructorCheck {
  public:
-  virtual ~DestructorCheck() {
-    rootGuard_.setAllDestroyed();
-  }
+  virtual ~DestructorCheck() { rootGuard_.setAllDestroyed(); }
 
   class Safety;
 
   class ForwardLink {
-   // These methods are mostly private because an outside caller could violate
-   // the integrity of the linked list.
+    // These methods are mostly private because an outside caller could violate
+    // the integrity of the linked list.
    private:
     void setAllDestroyed() {
       for (auto guard = next_; guard; guard = guard->next_) {
@@ -81,7 +80,7 @@ class DestructorCheck {
     // previous node.
     Safety* next_{nullptr};
 
-    friend DestructorCheck::~DestructorCheck();
+    friend class DestructorCheck;
     friend class Safety;
   };
 
@@ -96,7 +95,7 @@ class DestructorCheck {
         next_->prev_ = this;
       }
       prev_->next_ = this;
-     }
+    }
 
     ~Safety() {
       if (!destroyed()) {
@@ -113,14 +112,10 @@ class DestructorCheck {
     Safety& operator=(const Safety&) = delete;
     Safety& operator=(Safety&&) = delete;
 
-    bool destroyed() const {
-      return prev_ == nullptr;
-    }
+    bool destroyed() const { return prev_ == nullptr; }
 
    private:
-    void setDestroyed() {
-      prev_ = nullptr;
-    }
+    void setDestroyed() { prev_ = nullptr; }
 
     // This field is used to maintain the double-linked list. If the root has
     // been destroyed then the field is set to the nullptr sentinel value.
@@ -133,4 +128,4 @@ class DestructorCheck {
   ForwardLink rootGuard_;
 };
 
-}
+} // namespace folly

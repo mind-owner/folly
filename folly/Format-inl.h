@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -27,12 +27,17 @@
 
 #include <folly/Exception.h>
 #include <folly/FormatTraits.h>
+#include <folly/MapUtil.h>
+#include <folly/Portability.h>
 #include <folly/Traits.h>
+#include <folly/lang/Exception.h>
+#include <folly/lang/ToAscii.h>
 #include <folly/portability/Windows.h>
 
-// Ignore -Wformat-nonliteral warnings within this file
+// Ignore -Wformat-nonliteral and -Wconversion warnings within this file
 FOLLY_PUSH_WARNING
-FOLLY_GCC_DISABLE_WARNING("-Wformat-nonliteral")
+FOLLY_GNU_DISABLE_WARNING("-Wformat-nonliteral")
+FOLLY_GNU_DISABLE_WARNING("-Wconversion")
 
 namespace folly {
 
@@ -41,10 +46,10 @@ namespace detail {
 // Updates the end of the buffer after the comma separators have been added.
 void insertThousandsGroupingUnsafe(char* start_buffer, char** end_buffer);
 
-extern const char formatHexUpper[256][2];
-extern const char formatHexLower[256][2];
-extern const char formatOctal[512][3];
-extern const char formatBinary[256][8];
+extern const std::array<std::array<char, 2>, 256> formatHexUpper;
+extern const std::array<std::array<char, 2>, 256> formatHexLower;
+extern const std::array<std::array<char, 3>, 512> formatOctal;
+extern const std::array<std::array<char, 8>, 256> formatBinary;
 
 const size_t kMaxHexLength = 2 * sizeof(uintmax_t);
 const size_t kMaxOctalLength = 3 * sizeof(uintmax_t);
@@ -60,8 +65,11 @@ const size_t kMaxBinaryLength = 8 * sizeof(uintmax_t);
  * [buf+begin, buf+bufLen).
  */
 template <class Uint>
-size_t
-uintToHex(char* buffer, size_t bufLen, Uint v, const char (&repr)[256][2]) {
+size_t uintToHex(
+    char* buffer,
+    size_t bufLen,
+    Uint v,
+    std::array<std::array<char, 2>, 256> const& repr) {
   // 'v >>= 7, v >>= 1' is no more than a work around to get rid of shift size
   // warning when Uint = uint8_t (it's false as v >= 256 implies sizeof(v) > 1).
   for (; !less_than<unsigned, 256>(v); v >>= 7, v >>= 1) {
@@ -155,8 +163,7 @@ size_t uintToBinary(char* buffer, size_t bufLen, Uint v) {
 
 template <class Derived, bool containerMode, class... Args>
 BaseFormatter<Derived, containerMode, Args...>::BaseFormatter(
-    StringPiece str,
-    Args&&... args)
+    StringPiece str, Args&&... args)
     : str_(str), values_(std::forward<Args>(args)...) {}
 
 template <class Derived, bool containerMode, class... Args>
@@ -180,7 +187,8 @@ void BaseFormatter<Derived, containerMode, Args...>::operator()(
       p = q;
 
       if (p == end || *p != '}') {
-        throw BadFormatArg("folly::format: single '}' in format string");
+        throw_exception<BadFormatArg>(
+            "folly::format: single '}' in format string");
       }
       ++p;
     }
@@ -202,7 +210,8 @@ void BaseFormatter<Derived, containerMode, Args...>::operator()(
     p = q + 1;
 
     if (p == end) {
-      throw BadFormatArg("folly::format: '}' at end of format string");
+      throw_exception<BadFormatArg>(
+          "folly::format: '}' at end of format string");
     }
 
     // "{{" -> "{"
@@ -215,7 +224,7 @@ void BaseFormatter<Derived, containerMode, Args...>::operator()(
     // Format string
     q = static_cast<const char*>(memchr(p, '}', size_t(end - p)));
     if (q == nullptr) {
-      throw BadFormatArg("folly::format: missing ending '}'");
+      throw_exception<BadFormatArg>("folly::format: missing ending '}'");
     }
     FormatArg arg(StringPiece(p, q));
     p = q + 1;
@@ -253,18 +262,16 @@ void BaseFormatter<Derived, containerMode, Args...>::operator()(
           arg.width = asDerived().getSizeArg(size_t(arg.widthIndex), arg);
         }
 
-        try {
-          argIndex = to<int>(piece);
-        } catch (const std::out_of_range&) {
-          arg.error("argument index must be integer");
-        }
+        auto result = tryTo<int>(piece);
+        arg.enforce(result, "argument index must be integer");
+        argIndex = *result;
         arg.enforce(argIndex >= 0, "argument index must be non-negative");
         hasExplicitArgIndex = true;
       }
     }
 
     if (hasDefaultArgIndex && hasExplicitArgIndex) {
-      throw BadFormatArg(
+      throw_exception<BadFormatArg>(
           "folly::format: may not have both default and explicit arg indexes");
     }
 
@@ -272,28 +279,15 @@ void BaseFormatter<Derived, containerMode, Args...>::operator()(
   }
 }
 
-template <class Derived, bool containerMode, class... Args>
-void writeTo(
-    FILE* fp,
-    const BaseFormatter<Derived, containerMode, Args...>& formatter) {
-  auto writer = [fp](StringPiece sp) {
-    size_t n = fwrite(sp.data(), 1, sp.size(), fp);
-    if (n < sp.size()) {
-      throwSystemError("Formatter writeTo", "fwrite failed");
-    }
-  };
-  formatter(writer);
-}
-
 namespace format_value {
 
 template <class FormatCallback>
 void formatString(StringPiece val, FormatArg& arg, FormatCallback& cb) {
   if (arg.width != FormatArg::kDefaultWidth && arg.width < 0) {
-    throw BadFormatArg("folly::format: invalid width");
+    throw_exception<BadFormatArg>("folly::format: invalid width");
   }
   if (arg.precision != FormatArg::kDefaultPrecision && arg.precision < 0) {
-    throw BadFormatArg("folly::format: invalid precision");
+    throw_exception<BadFormatArg>("folly::format: invalid precision");
   }
 
   if (arg.precision != FormatArg::kDefaultPrecision &&
@@ -320,6 +314,8 @@ void formatString(StringPiece val, FormatArg& arg, FormatCallback& cb) {
     int padChars = static_cast<int>(arg.width - val.size());
     memset(padBuf, fill, size_t(std::min(padBufSize, padChars)));
 
+    FOLLY_PUSH_WARNING
+    FOLLY_CLANG_DISABLE_WARNING("-Wcovered-switch-default")
     switch (arg.align) {
       case FormatArg::Align::DEFAULT:
       case FormatArg::Align::LEFT:
@@ -333,10 +329,12 @@ void formatString(StringPiece val, FormatArg& arg, FormatCallback& cb) {
       case FormatArg::Align::PAD_AFTER_SIGN:
         pad(padChars);
         break;
+      case FormatArg::Align::INVALID:
       default:
         abort();
         break;
     }
+    FOLLY_POP_WARNING
   }
 
   cb(val);
@@ -348,10 +346,7 @@ void formatString(StringPiece val, FormatArg& arg, FormatCallback& cb) {
 
 template <class FormatCallback>
 void formatNumber(
-    StringPiece val,
-    int prefixLen,
-    FormatArg& arg,
-    FormatCallback& cb) {
+    StringPiece val, int prefixLen, FormatArg& arg, FormatCallback& cb) {
   // precision means something different for numbers
   arg.precision = FormatArg::kDefaultPrecision;
   if (arg.align == FormatArg::Align::DEFAULT) {
@@ -383,7 +378,7 @@ void formatFormatter(
       arg.align != FormatArg::Align::DEFAULT) {
     // We can only avoid creating a temporary string if we align left,
     // as we'd need to know the size beforehand otherwise
-    format_value::formatString(formatter.fbstr(), arg, cb);
+    format_value::formatString(formatter.str(), arg, cb);
   } else {
     auto fn = [&arg, &cb](StringPiece sp) mutable {
       int sz = static_cast<int>(sp.size());
@@ -420,9 +415,7 @@ class FormatValue<
  public:
   explicit FormatValue(T val) : val_(val) {}
 
-  T getValue() const {
-    return val_;
-  }
+  T getValue() const { return val_; }
 
   template <class FormatCallback>
   void format(FormatArg& arg, FormatCallback& cb) const {
@@ -444,10 +437,14 @@ class FormatValue<
     char sign;
     if (std::is_signed<T>::value) {
       if (folly::is_negative(val_)) {
-        uval = UT(-static_cast<UT>(val_));
+        // avoid unary negation of unsigned types, which may be warned against
+        // avoid ub signed integer overflow, which ubsan checks against
+        uval = UT(0 - static_cast<UT>(val_));
         sign = '-';
       } else {
         uval = static_cast<UT>(val_);
+        FOLLY_PUSH_WARNING
+        FOLLY_CLANG_DISABLE_WARNING("-Wcovered-switch-default")
         switch (arg.sign) {
           case FormatArg::Sign::PLUS_OR_MINUS:
             sign = '+';
@@ -455,10 +452,14 @@ class FormatValue<
           case FormatArg::Sign::SPACE_OR_MINUS:
             sign = ' ';
             break;
+          case FormatArg::Sign::DEFAULT:
+          case FormatArg::Sign::MINUS:
+          case FormatArg::Sign::INVALID:
           default:
             sign = '\0';
             break;
         }
+        FOLLY_POP_WARNING
       }
     } else {
       uval = static_cast<UT>(val_);
@@ -469,14 +470,18 @@ class FormatValue<
           "sign specifications not allowed for unsigned values");
     }
 
-    // max of:
-    // #x: 0x prefix + 16 bytes = 18 bytes
-    // #o: 0 prefix + 22 bytes = 23 bytes
-    // #b: 0b prefix + 64 bytes = 65 bytes
+    // 1 byte for sign, plus max of:
+    // #x: two byte "0x" prefix + kMaxHexLength
+    // #o: one byte "0" prefix + kMaxOctalLength
+    // #b: two byte "0b" prefix + kMaxBinaryLength
+    // n: 19 bytes + 1 NUL
     // ,d: 26 bytes (including thousands separators!)
-    // + nul terminator
-    // + 3 for sign and prefix shenanigans (see below)
-    constexpr size_t valBufSize = 69;
+    //
+    // Binary format must take the most space, so we use that.
+    //
+    // Note that we produce a StringPiece rather than NUL-terminating,
+    // so we don't need an extra byte for a NUL.
+    constexpr size_t valBufSize = 1 + 2 + detail::kMaxBinaryLength;
     char valBuf[valBufSize];
     char* valBufBegin = nullptr;
     char* valBufEnd = nullptr;
@@ -496,7 +501,7 @@ class FormatValue<
             presentation,
             "' specifier");
 
-        valBufBegin = valBuf + 3; // room for sign and base prefix
+        valBufBegin = valBuf + 1; // room for sign
 #if defined(__ANDROID__)
         int len = snprintf(
             valBufBegin,
@@ -522,10 +527,11 @@ class FormatValue<
             "base prefix not allowed with '",
             presentation,
             "' specifier");
-        valBufBegin = valBuf + 3; // room for sign and base prefix
+        valBufBegin = valBuf + 1; // room for sign
 
-        // Use uintToBuffer, faster than sprintf
-        valBufEnd = valBufBegin + uint64ToBufferUnsafe(uval, valBufBegin);
+        // Use to_ascii_decimal, faster than sprintf
+        valBufEnd = valBufBegin +
+            to_ascii_decimal(valBufBegin, valBuf + sizeof(valBuf), uval);
         if (arg.thousandsSeparator) {
           detail::insertThousandsGroupingUnsafe(valBufBegin, &valBufEnd);
         }
@@ -541,7 +547,7 @@ class FormatValue<
             "thousands separator (',') not allowed with '",
             presentation,
             "' specifier");
-        valBufBegin = valBuf + 3;
+        valBufBegin = valBuf + 1; // room for sign
         *valBufBegin = static_cast<char>(uval);
         valBufEnd = valBufBegin + 1;
         break;
@@ -552,9 +558,8 @@ class FormatValue<
             "thousands separator (',') not allowed with '",
             presentation,
             "' specifier");
-        valBufEnd = valBuf + valBufSize - 1;
-        valBufBegin =
-            valBuf + detail::uintToOctal(valBuf, valBufSize - 1, uval);
+        valBufEnd = valBuf + valBufSize;
+        valBufBegin = &valBuf[detail::uintToOctal(valBuf, valBufSize, uval)];
         if (arg.basePrefix) {
           *--valBufBegin = '0';
           prefixLen = 1;
@@ -566,9 +571,8 @@ class FormatValue<
             "thousands separator (',') not allowed with '",
             presentation,
             "' specifier");
-        valBufEnd = valBuf + valBufSize - 1;
-        valBufBegin =
-            valBuf + detail::uintToHexLower(valBuf, valBufSize - 1, uval);
+        valBufEnd = valBuf + valBufSize;
+        valBufBegin = &valBuf[detail::uintToHexLower(valBuf, valBufSize, uval)];
         if (arg.basePrefix) {
           *--valBufBegin = 'x';
           *--valBufBegin = '0';
@@ -581,9 +585,8 @@ class FormatValue<
             "thousands separator (',') not allowed with '",
             presentation,
             "' specifier");
-        valBufEnd = valBuf + valBufSize - 1;
-        valBufBegin =
-            valBuf + detail::uintToHexUpper(valBuf, valBufSize - 1, uval);
+        valBufEnd = valBuf + valBufSize;
+        valBufBegin = &valBuf[detail::uintToHexUpper(valBuf, valBufSize, uval)];
         if (arg.basePrefix) {
           *--valBufBegin = 'X';
           *--valBufBegin = '0';
@@ -597,9 +600,8 @@ class FormatValue<
             "thousands separator (',') not allowed with '",
             presentation,
             "' specifier");
-        valBufEnd = valBuf + valBufSize - 1;
-        valBufBegin =
-            valBuf + detail::uintToBinary(valBuf, valBufSize - 1, uval);
+        valBufEnd = valBuf + valBufSize;
+        valBufBegin = &valBuf[detail::uintToBinary(valBuf, valBufSize, uval)];
         if (arg.basePrefix) {
           *--valBufBegin = presentation; // 0b or 0B
           *--valBufBegin = '0';
@@ -796,8 +798,8 @@ template <class T, class = void>
 class TryFormatValue {
  public:
   template <class FormatCallback>
-  static void
-  formatOrFail(T& /* value */, FormatArg& arg, FormatCallback& /* cb */) {
+  static void formatOrFail(
+      T& /* value */, FormatArg& arg, FormatCallback& /* cb */) {
     arg.error("No formatter available for this type");
   }
 };
@@ -920,9 +922,7 @@ struct KeyFromStringPiece;
 template <>
 struct KeyFromStringPiece<std::string> : public FormatTraitsBase {
   typedef std::string key_type;
-  static std::string convert(StringPiece s) {
-    return s.toString();
-  }
+  static std::string convert(StringPiece s) { return s.toString(); }
   typedef void enabled;
 };
 
@@ -930,18 +930,14 @@ struct KeyFromStringPiece<std::string> : public FormatTraitsBase {
 template <>
 struct KeyFromStringPiece<fbstring> : public FormatTraitsBase {
   typedef fbstring key_type;
-  static fbstring convert(StringPiece s) {
-    return s.toFbstring();
-  }
+  static fbstring convert(StringPiece s) { return s.to<fbstring>(); }
 };
 
 // StringPiece
 template <>
 struct KeyFromStringPiece<StringPiece> : public FormatTraitsBase {
   typedef StringPiece key_type;
-  static StringPiece convert(StringPiece s) {
-    return s;
-  }
+  static StringPiece convert(StringPiece s) { return s; }
 };
 
 // Base class for associative types keyed by strings
@@ -950,10 +946,13 @@ struct KeyableTraitsAssoc : public FormatTraitsBase {
   typedef typename T::key_type key_type;
   typedef typename T::value_type::second_type value_type;
   static const value_type& at(const T& map, StringPiece key) {
-    return map.at(KeyFromStringPiece<key_type>::convert(key));
+    if (auto ptr = get_ptr(map, KeyFromStringPiece<key_type>::convert(key))) {
+      return *ptr;
+    }
+    throw_exception<FormatKeyNotFoundException>(key);
   }
-  static const value_type&
-  at(const T& map, StringPiece key, const value_type& dflt) {
+  static const value_type& at(
+      const T& map, StringPiece key, const value_type& dflt) {
     auto pos = map.find(KeyFromStringPiece<key_type>::convert(key));
     return pos != map.end() ? pos->second : dflt;
   }
@@ -1063,14 +1062,14 @@ class FormatValue<std::tuple<Args...>> {
   static constexpr size_t valueCount = std::tuple_size<Tuple>::value;
 
   template <size_t K, class Callback>
-  typename std::enable_if<K == valueCount>::type
-  doFormatFrom(size_t i, FormatArg& arg, Callback& /* cb */) const {
-    arg.enforce("tuple index out of range, max=", i);
+  typename std::enable_if<K == valueCount>::type doFormatFrom(
+      size_t i, FormatArg& arg, Callback& /* cb */) const {
+    arg.error("tuple index out of range, max=", i);
   }
 
   template <size_t K, class Callback>
-  typename std::enable_if<(K < valueCount)>::type
-  doFormatFrom(size_t i, FormatArg& arg, Callback& cb) const {
+  typename std::enable_if<(K < valueCount)>::type doFormatFrom(
+      size_t i, FormatArg& arg, Callback& cb) const {
     if (i == K) {
       FormatValue<typename std::decay<
           typename std::tuple_element<K, Tuple>::type>::type>(std::get<K>(val_))
@@ -1114,8 +1113,7 @@ class FormatValue<
  */
 template <class Tgt, class Derived, bool containerMode, class... Args>
 typename std::enable_if<IsSomeString<Tgt>::value>::type toAppend(
-    const BaseFormatter<Derived, containerMode, Args...>& value,
-    Tgt* result) {
+    const BaseFormatter<Derived, containerMode, Args...>& value, Tgt* result) {
   value.appendTo(*result);
 }
 

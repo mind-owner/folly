@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,6 +18,7 @@
 
 #include <map>
 #include <string>
+
 #include <folly/Range.h>
 #include <folly/ScopeGuard.h>
 #include <folly/experimental/io/FsUtil.h>
@@ -41,26 +42,43 @@ class TemporaryFile {
   enum class Scope {
     PERMANENT,
     UNLINK_IMMEDIATELY,
-    UNLINK_ON_DESTRUCTION
+    UNLINK_ON_DESTRUCTION,
   };
-  explicit TemporaryFile(StringPiece namePrefix = StringPiece(),
-                         fs::path dir = fs::path(),
-                         Scope scope = Scope::UNLINK_ON_DESTRUCTION,
-                         bool closeOnDestruction = true);
+  explicit TemporaryFile(
+      StringPiece namePrefix = StringPiece(),
+      fs::path dir = fs::path(),
+      Scope scope = Scope::UNLINK_ON_DESTRUCTION,
+      bool closeOnDestruction = true);
   ~TemporaryFile();
 
-  // Movable, but not copiable
-  TemporaryFile(TemporaryFile&&) = default;
-  TemporaryFile& operator=(TemporaryFile&&) = default;
+  // Movable, but not copyable
+  TemporaryFile(TemporaryFile&& other) noexcept { assign(other); }
 
+  TemporaryFile& operator=(TemporaryFile&& other) {
+    if (this != &other) {
+      reset();
+      assign(other);
+    }
+    return *this;
+  }
+
+  void close();
   int fd() const { return fd_; }
   const fs::path& path() const;
+  void reset();
 
  private:
   Scope scope_;
   bool closeOnDestruction_;
   int fd_;
   fs::path path_;
+
+  void assign(TemporaryFile& other) {
+    scope_ = other.scope_;
+    closeOnDestruction_ = other.closeOnDestruction_;
+    fd_ = std::exchange(other.fd_, -1);
+    path_ = other.path_;
+  }
 };
 
 /**
@@ -79,20 +97,19 @@ class TemporaryDirectory {
  public:
   enum class Scope {
     PERMANENT,
-    DELETE_ON_DESTRUCTION
+    DELETE_ON_DESTRUCTION,
   };
-  explicit TemporaryDirectory(StringPiece namePrefix = StringPiece(),
-                              fs::path dir = fs::path(),
-                              Scope scope = Scope::DELETE_ON_DESTRUCTION);
+  explicit TemporaryDirectory(
+      StringPiece namePrefix = StringPiece(),
+      fs::path dir = fs::path(),
+      Scope scope = Scope::DELETE_ON_DESTRUCTION);
   ~TemporaryDirectory();
 
   // Movable, but not copiable
   TemporaryDirectory(TemporaryDirectory&&) = default;
   TemporaryDirectory& operator=(TemporaryDirectory&&) = default;
 
-  const fs::path& path() const {
-    return *path_;
-  }
+  const fs::path& path() const { return *path_; }
 
  private:
   Scope scope_;
@@ -104,7 +121,7 @@ class TemporaryDirectory {
  * upon destruction, also changing back to the original working directory.
  */
 class ChangeToTempDir {
-public:
+ public:
   ChangeToTempDir();
   ~ChangeToTempDir();
 
@@ -114,9 +131,9 @@ public:
 
   const fs::path& path() const { return dir_.path(); }
 
-private:
-  fs::path initialPath_;
+ private:
   TemporaryDirectory dir_;
+  fs::path orig_;
 };
 
 namespace detail {
@@ -126,7 +143,7 @@ struct SavedState {
 };
 SavedState disableInvalidParameters();
 void enableInvalidParameters(SavedState state);
-}
+} // namespace detail
 
 // Ok, so fun fact: The CRT on windows will actually abort
 // on certain failed parameter validation checks in debug
@@ -140,9 +157,7 @@ void enableInvalidParameters(SavedState state);
 template <typename Func>
 auto msvcSuppressAbortOnInvalidParams(Func func) -> decltype(func()) {
   auto savedState = detail::disableInvalidParameters();
-  SCOPE_EXIT {
-    detail::enableInvalidParameters(savedState);
-  };
+  SCOPE_EXIT { detail::enableInvalidParameters(savedState); };
   return func();
 }
 
@@ -152,22 +167,20 @@ auto msvcSuppressAbortOnInvalidParams(Func func) -> decltype(func()) {
  * http://regex101.com/ for a PCRE simulator.
  */
 #define EXPECT_PCRE_MATCH(pattern_stringpiece, target_stringpiece) \
-  EXPECT_PRED2( \
-    ::folly::test::detail::hasPCREPatternMatch, \
-    pattern_stringpiece, \
-    target_stringpiece \
-  )
+  EXPECT_PRED2(                                                    \
+      ::folly::test::detail::hasPCREPatternMatch,                  \
+      pattern_stringpiece,                                         \
+      target_stringpiece)
 #define EXPECT_NO_PCRE_MATCH(pattern_stringpiece, target_stringpiece) \
-  EXPECT_PRED2( \
-    ::folly::test::detail::hasNoPCREPatternMatch, \
-    pattern_stringpiece, \
-    target_stringpiece \
-  )
+  EXPECT_PRED2(                                                       \
+      ::folly::test::detail::hasNoPCREPatternMatch,                   \
+      pattern_stringpiece,                                            \
+      target_stringpiece)
 
 namespace detail {
-  bool hasPCREPatternMatch(StringPiece pattern, StringPiece target);
-  bool hasNoPCREPatternMatch(StringPiece pattern, StringPiece target);
-}  // namespace detail
+bool hasPCREPatternMatch(StringPiece pattern, StringPiece target);
+bool hasNoPCREPatternMatch(StringPiece pattern, StringPiece target);
+} // namespace detail
 
 /**
  * Use these patterns together with CaptureFD and EXPECT_PCRE_MATCH() to
@@ -179,10 +192,16 @@ namespace detail {
  *   LOG(ERROR) << "Uh-oh";
  *   EXPECT_PCRE_MATCH(glogErrorPattern(), stderr.readIncremental());
  */
-inline std::string glogErrorPattern() { return ".*(^|\n)E[0-9].*"; }
-inline std::string glogWarningPattern() { return ".*(^|\n)W[0-9].*"; }
+inline std::string glogErrorPattern() {
+  return ".*(^|\n)E[0-9].*";
+}
+inline std::string glogWarningPattern() {
+  return ".*(^|\n)W[0-9].*";
+}
 // Error OR warning
-inline std::string glogErrOrWarnPattern() { return ".*(^|\n)[EW][0-9].*"; }
+inline std::string glogErrOrWarnPattern() {
+  return ".*(^|\n)[EW][0-9].*";
+}
 
 /**
  * Temporarily capture a file descriptor by redirecting it into a file.
@@ -191,9 +210,12 @@ inline std::string glogErrOrWarnPattern() { return ".*(^|\n)[EW][0-9].*"; }
  * Great for testing logging (see also glog*Pattern()).
  */
 class CaptureFD {
-private:
-  struct NoOpChunkCob { void operator()(StringPiece) {} };
-public:
+ private:
+  struct NoOpChunkCob {
+    void operator()(StringPiece) {}
+  };
+
+ public:
   using ChunkCob = std::function<void(folly::StringPiece)>;
 
   /**
@@ -222,15 +244,15 @@ public:
    */
   std::string readIncremental();
 
-private:
+ private:
   ChunkCob chunkCob_;
   TemporaryFile file_;
 
   int fd_;
-  int oldFDCopy_;  // equal to fd_ after restore()
+  int oldFDCopy_; // equal to fd_ after restore()
 
-  off_t readOffset_;  // for incremental reading
+  off_t readOffset_; // for incremental reading
 };
 
-}  // namespace test
-}  // namespace folly
+} // namespace test
+} // namespace folly

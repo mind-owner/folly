@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,16 +15,18 @@
  */
 
 #include <folly/portability/Time.h>
-#include <folly/Likely.h>
 
-#include <assert.h>
+#include <folly/CPortability.h>
+#include <folly/Likely.h>
+#include <folly/Utility.h>
+
+#include <cassert>
 
 #include <chrono>
 
 template <typename _Rep, typename _Period>
 static void duration_to_ts(
-    std::chrono::duration<_Rep, _Period> d,
-    struct timespec* ts) {
+    std::chrono::duration<_Rep, _Period> d, struct timespec* ts) {
   ts->tv_sec =
       time_t(std::chrono::duration_cast<std::chrono::seconds>(d).count());
   ts->tv_nsec = long(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -35,13 +37,13 @@ static void duration_to_ts(
 #if !FOLLY_HAVE_CLOCK_GETTIME || FOLLY_FORCE_CLOCK_GETTIME_DEFINITION
 #if __MACH__
 #include <errno.h>
-#include <mach/mach_init.h>
-#include <mach/mach_port.h>
-#include <mach/mach_time.h>
-#include <mach/mach_types.h>
-#include <mach/task.h>
-#include <mach/thread_act.h>
-#include <mach/vm_map.h>
+#include <mach/mach_init.h> // @manual
+#include <mach/mach_port.h> // @manual
+#include <mach/mach_time.h> // @manual
+#include <mach/mach_types.h> // @manual
+#include <mach/task.h> // @manual
+#include <mach/thread_act.h> // @manual
+#include <mach/vm_map.h> // @manual
 
 static std::chrono::nanoseconds time_value_to_ns(time_value_t t) {
   return std::chrono::seconds(t.seconds) +
@@ -97,8 +99,8 @@ static int clock_thread_cputime(struct timespec* ts) {
   return 0;
 }
 
-int clock_gettime(clockid_t clk_id, struct timespec* ts) {
-  switch (clk_id) {
+FOLLY_ATTR_WEAK int clock_gettime(clockid_t clk_id, struct timespec* ts) {
+  switch (folly::to_underlying(clk_id)) {
     case CLOCK_REALTIME: {
       auto now = std::chrono::system_clock::now().time_since_epoch();
       duration_to_ts(now, ts);
@@ -342,6 +344,14 @@ char* strptime(
     return nullptr;
   }
   return const_cast<char*>(s + input.tellg());
+}
+
+time_t timelocal(tm* tm) {
+  return mktime(tm);
+}
+
+time_t timegm(tm* tm) {
+  return _mkgmtime(tm);
 }
 }
 #endif

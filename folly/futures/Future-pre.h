@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,11 +20,25 @@
 
 namespace folly {
 
-template <class> class Promise;
+template <class>
+class Promise;
+
+template <class T>
+class SemiFuture;
+
+template <typename T>
+struct isSemiFuture : std::false_type {
+  using Inner = lift_unit_t<T>;
+};
+
+template <typename T>
+struct isSemiFuture<SemiFuture<T>> : std::true_type {
+  typedef T Inner;
+};
 
 template <typename T>
 struct isFuture : std::false_type {
-  using Inner = typename Unit::Lift<T>::type;
+  using Inner = lift_unit_t<T>;
 };
 
 template <typename T>
@@ -33,20 +47,46 @@ struct isFuture<Future<T>> : std::true_type {
 };
 
 template <typename T>
-struct isTry : std::false_type {};
+struct isFutureOrSemiFuture : std::false_type {
+  using Inner = lift_unit_t<T>;
+  using Return = Inner;
+};
 
 template <typename T>
-struct isTry<Try<T>> : std::true_type {};
+struct isFutureOrSemiFuture<Try<T>> : std::false_type {
+  using Inner = lift_unit_t<T>;
+  using Return = Inner;
+};
 
+template <typename T>
+struct isFutureOrSemiFuture<Future<T>> : std::true_type {
+  typedef T Inner;
+  using Return = Future<Inner>;
+};
+
+template <typename T>
+struct isFutureOrSemiFuture<Future<Try<T>>> : std::true_type {
+  typedef T Inner;
+  using Return = Future<Inner>;
+};
+
+template <typename T>
+struct isFutureOrSemiFuture<SemiFuture<T>> : std::true_type {
+  typedef T Inner;
+  using Return = SemiFuture<Inner>;
+};
+
+template <typename T>
+struct isFutureOrSemiFuture<SemiFuture<Try<T>>> : std::true_type {
+  typedef T Inner;
+  using Return = SemiFuture<Inner>;
+};
+
+namespace futures {
 namespace detail {
 
-template <class> class Core;
-template <class...> struct CollectAllVariadicContext;
-template <class...> struct CollectVariadicContext;
-template <class> struct CollectContext;
-
-template<typename F, typename... Args>
-using resultOf = decltype(std::declval<F>()(std::declval<Args>()...));
+template <class>
+class Core;
 
 template <typename...>
 struct ArgType;
@@ -54,6 +94,7 @@ struct ArgType;
 template <typename Arg, typename... Args>
 struct ArgType<Arg, Args...> {
   typedef Arg FirstArg;
+  typedef ArgType<Args...> Tail;
 };
 
 template <>
@@ -61,59 +102,96 @@ struct ArgType<> {
   typedef void FirstArg;
 };
 
-template <bool isTry, typename F, typename... Args>
+template <bool isTry_, typename F, typename... Args>
 struct argResult {
-  using Result = resultOf<F, Args...>;
+  using Function = F;
+  using ArgList = ArgType<Args...>;
+  using Result = invoke_result_t<F, Args...>;
+  using ArgsSize = index_constant<sizeof...(Args)>;
+  static constexpr bool isTry() { return isTry_; }
 };
 
-template<typename F, typename... Args>
-struct callableWith {
-    template<typename T,
-             typename = detail::resultOf<T, Args...>>
-    static constexpr std::true_type
-    check(std::nullptr_t) { return std::true_type{}; }
-
-    template<typename>
-    static constexpr std::false_type
-    check(...) { return std::false_type{}; }
-
-    typedef decltype(check<F>(nullptr)) type;
-    static constexpr bool value = type::value;
-};
-
-template<typename T, typename F>
+template <typename T, typename F>
 struct callableResult {
   typedef typename std::conditional<
-    callableWith<F>::value,
-    detail::argResult<false, F>,
-    typename std::conditional<
-      callableWith<F, T&&>::value,
-      detail::argResult<false, F, T&&>,
+      is_invocable_v<F>,
+      detail::argResult<false, F>,
       typename std::conditional<
-        callableWith<F, T&>::value,
-        detail::argResult<false, F, T&>,
-        typename std::conditional<
-          callableWith<F, Try<T>&&>::value,
-          detail::argResult<true, F, Try<T>&&>,
-          detail::argResult<true, F, Try<T>&>>::type>::type>::type>::type Arg;
-  typedef isFuture<typename Arg::Result> ReturnsFuture;
+          is_invocable_v<F, T&&>,
+          detail::argResult<false, F, T&&>,
+          detail::argResult<true, F, Try<T>&&>>::type>::type Arg;
+  typedef isFutureOrSemiFuture<typename Arg::Result> ReturnsFuture;
   typedef Future<typename ReturnsFuture::Inner> Return;
 };
 
+template <typename T, typename F>
+struct executorCallableResult {
+  typedef typename std::conditional<
+      is_invocable_v<F, Executor::KeepAlive<>&&>,
+      detail::argResult<false, F, Executor::KeepAlive<>&&>,
+      typename std::conditional<
+          is_invocable_v<F, Executor::KeepAlive<>&&, T&&>,
+          detail::argResult<false, F, Executor::KeepAlive<>&&, T&&>,
+          detail::argResult<true, F, Executor::KeepAlive<>&&, Try<T>&&>>::
+          type>::type Arg;
+  typedef isFutureOrSemiFuture<typename Arg::Result> ReturnsFuture;
+  typedef Future<typename ReturnsFuture::Inner> Return;
+};
+
+template <
+    typename T,
+    typename F,
+    typename = std::enable_if_t<is_invocable_v<F, Try<T>&&>>>
+struct tryCallableResult {
+  typedef detail::argResult<true, F, Try<T>&&> Arg;
+  typedef isFutureOrSemiFuture<typename Arg::Result> ReturnsFuture;
+  typedef typename ReturnsFuture::Inner value_type;
+  typedef Future<value_type> Return;
+};
+
+template <
+    typename T,
+    typename F,
+    typename = std::enable_if_t<is_invocable_v<F, Executor*, Try<T>&&>>>
+struct tryExecutorCallableResult {
+  typedef detail::argResult<true, F, Executor::KeepAlive<>&&, Try<T>&&> Arg;
+  typedef isFutureOrSemiFuture<typename Arg::Result> ReturnsFuture;
+  typedef typename ReturnsFuture::Inner value_type;
+  typedef Future<value_type> Return;
+};
+
+template <typename T, typename F>
+struct valueCallableResult {
+  typedef detail::argResult<false, F, T&&> Arg;
+  typedef isFutureOrSemiFuture<typename Arg::Result> ReturnsFuture;
+  typedef typename ReturnsFuture::Inner value_type;
+  typedef typename Arg::ArgList::FirstArg FirstArg;
+  typedef Future<value_type> Return;
+};
+
+template <typename T, typename F>
+struct valueExecutorCallableResult {
+  typedef detail::argResult<false, F, Executor::KeepAlive<>&&, T&&> Arg;
+  typedef isFutureOrSemiFuture<typename Arg::Result> ReturnsFuture;
+  typedef typename ReturnsFuture::Inner value_type;
+  typedef typename Arg::ArgList::Tail::FirstArg ValueArg;
+  typedef Future<value_type> Return;
+};
+
 template <typename L>
-struct Extract : Extract<decltype(&L::operator())> { };
+struct Extract : Extract<decltype(&L::operator())> {};
 
 template <typename Class, typename R, typename... Args>
-struct Extract<R(Class::*)(Args...) const> {
-  typedef isFuture<R> ReturnsFuture;
+struct Extract<R (Class::*)(Args...) const> {
+  typedef isFutureOrSemiFuture<R> ReturnsFuture;
   typedef Future<typename ReturnsFuture::Inner> Return;
   typedef typename ReturnsFuture::Inner RawReturn;
   typedef typename ArgType<Args...>::FirstArg FirstArg;
 };
 
 template <typename Class, typename R, typename... Args>
-struct Extract<R(Class::*)(Args...)> {
-  typedef isFuture<R> ReturnsFuture;
+struct Extract<R (Class::*)(Args...)> {
+  typedef isFutureOrSemiFuture<R> ReturnsFuture;
   typedef Future<typename ReturnsFuture::Inner> Return;
   typedef typename ReturnsFuture::Inner RawReturn;
   typedef typename ArgType<Args...>::FirstArg FirstArg;
@@ -121,7 +199,7 @@ struct Extract<R(Class::*)(Args...)> {
 
 template <typename R, typename... Args>
 struct Extract<R (*)(Args...)> {
-  typedef isFuture<R> ReturnsFuture;
+  typedef isFutureOrSemiFuture<R> ReturnsFuture;
   typedef Future<typename ReturnsFuture::Inner> Return;
   typedef typename ReturnsFuture::Inner RawReturn;
   typedef typename ArgType<Args...>::FirstArg FirstArg;
@@ -129,33 +207,37 @@ struct Extract<R (*)(Args...)> {
 
 template <typename R, typename... Args>
 struct Extract<R (&)(Args...)> {
-  typedef isFuture<R> ReturnsFuture;
+  typedef isFutureOrSemiFuture<R> ReturnsFuture;
   typedef Future<typename ReturnsFuture::Inner> Return;
   typedef typename ReturnsFuture::Inner RawReturn;
   typedef typename ArgType<Args...>::FirstArg FirstArg;
 };
 
-// gcc-4.8 refuses to capture a function reference in a lambda. This can be
-// mitigated by casting them to function pointer types first. The following
-// helper is used in Future.h to achieve that where necessary.
-// When compiling with gcc versions 4.9 and up, as well as clang, we do not
-// need to apply FunctionReferenceToPointer (i.e. T can be used instead of
-// FunctionReferenceToPointer<T>).
-// Applying FunctionReferenceToPointer first, the code works on all tested
-// compiler versions: gcc 4.8 and above, cland 3.5 and above.
+class DeferredExecutor;
 
-template <typename T>
-struct FunctionReferenceToPointer {
-  using type = T;
-};
+template <class T, class F>
+auto makeExecutorLambda(
+    F&& func, typename std::enable_if<is_invocable_v<F>, int>::type = 0) {
+  return
+      [func = static_cast<F&&>(func)](Executor::KeepAlive<>&&, auto&&) mutable {
+        return static_cast<F&&>(func)();
+      };
+}
 
-template <typename R, typename... Args>
-struct FunctionReferenceToPointer<R (&)(Args...)> {
-  using type = R (*)(Args...);
-};
+template <class T, class F>
+auto makeExecutorLambda(
+    F&& func, typename std::enable_if<!is_invocable_v<F>, int>::type = 0) {
+  using R = futures::detail::callableResult<T, F&&>;
+  return [func = static_cast<F&&>(func)](
+             Executor::KeepAlive<>&&,
+             typename R::Arg::ArgList::FirstArg&& param) mutable {
+    return static_cast<F&&>(func)(static_cast<decltype(param)>(param));
+  };
+}
 
-} // detail
+} // namespace detail
+} // namespace futures
 
 class Timekeeper;
 
-} // namespace
+} // namespace folly

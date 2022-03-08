@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,11 +16,13 @@
 
 #pragma once
 
-#include <folly/Memory.h>
 #include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+#include <folly/CPortability.h>
+#include <folly/Memory.h>
 
 namespace folly {
 namespace experimental {
@@ -41,28 +43,18 @@ struct EnvironmentState {
   static EnvironmentState fromCurrentEnvironment();
 
   // Returns an empty EnvironmentState
-  static EnvironmentState empty() {
-    return {};
-  }
+  static EnvironmentState empty() { return {}; }
 
   explicit EnvironmentState(EnvType const& env) : env_(env) {}
   explicit EnvironmentState(EnvType&& env) : env_(std::move(env)) {}
 
   // Get the model environment for querying.
-  EnvType const& operator*() const {
-    return env_;
-  }
-  EnvType const* operator->() const {
-    return &env_;
-  }
+  EnvType const& operator*() const { return env_; }
+  EnvType const* operator->() const { return &env_; }
 
   // Get the model environment for mutation or querying.
-  EnvType& operator*() {
-    return env_;
-  }
-  EnvType* operator->() {
-    return &env_;
-  }
+  EnvType& operator*() { return env_; }
+  EnvType* operator->() { return &env_; }
 
   // Update the process environment with the one in the stored model.
   // Subsequent changes to the model do not alter the process environment. The
@@ -87,7 +79,7 @@ struct EnvironmentState {
   EnvType env_;
 };
 
-struct MalformedEnvironment : std::runtime_error {
+struct FOLLY_EXPORT MalformedEnvironment : std::runtime_error {
   using std::runtime_error::runtime_error;
 };
 } // namespace experimental

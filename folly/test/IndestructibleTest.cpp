@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <tuple>
 
 #include <folly/Memory.h>
 #include <folly/portability/GTest.h>
@@ -46,12 +47,21 @@ struct Magic {
   ~Magic() { dtor_(); }
 };
 
+template <typename T>
+struct DeferredDtor {
+  folly::Indestructible<T>& obj_;
+  explicit constexpr DeferredDtor(folly::Indestructible<T>& obj) noexcept
+      : obj_{obj} {}
+  ~DeferredDtor() { obj_->~T(); }
+};
+
 class IndestructibleTest : public testing::Test {};
-}
+} // namespace
 
 TEST_F(IndestructibleTest, access) {
-  static const Indestructible<map<string, int>> data{
+  Indestructible<map<string, int>> data{
       map<string, int>{{"key1", 17}, {"key2", 19}, {"key3", 23}}};
+  DeferredDtor s{data};
 
   auto& m = *data;
   EXPECT_EQ(19, m.at("key2"));
@@ -61,7 +71,7 @@ TEST_F(IndestructibleTest, no_destruction) {
   int state = 0;
   int value = 0;
 
-  static Indestructible<Magic> sing(
+  Indestructible<Magic> sing(
       [&] {
         ++state;
         value = 7;
@@ -76,37 +86,9 @@ TEST_F(IndestructibleTest, no_destruction) {
 }
 
 TEST_F(IndestructibleTest, empty) {
-  static const Indestructible<map<string, int>> data;
+  const Indestructible<map<string, int>> data;
   auto& m = *data;
   EXPECT_EQ(0, m.size());
-}
-
-TEST_F(IndestructibleTest, move) {
-  int state = 0;
-  int value = 0;
-  int moves = 0;
-
-  static Indestructible<Magic> sing( // move assignment
-      [&] {
-        ++state;
-        value = 7;
-      },
-      [&] { state = -1; },
-      [&] { ++moves; });
-
-  EXPECT_EQ(1, state);
-  EXPECT_EQ(7, value);
-  EXPECT_EQ(0, moves);
-
-  // move constructor
-  static Indestructible<Magic> move_ctor(std::move(sing));
-  EXPECT_EQ(1, state);
-  EXPECT_EQ(1, moves);
-
-  // move assignment
-  static Indestructible<Magic> move_assign = std::move(move_ctor);
-  EXPECT_EQ(1, state);
-  EXPECT_EQ(2, moves);
 }
 
 TEST_F(IndestructibleTest, disabled_default_ctor) {
@@ -118,4 +100,41 @@ TEST_F(IndestructibleTest, disabled_default_ctor) {
   EXPECT_FALSE((std::is_constructible<Indestructible<Foo>>::value));
   EXPECT_FALSE((std::is_constructible<Indestructible<Foo>, Magic>::value));
   EXPECT_TRUE((std::is_constructible<Indestructible<Foo>, int>::value));
+}
+
+TEST_F(IndestructibleTest, list_initialization) {
+  folly::Indestructible<std::map<int, int>> map{{{1, 2}}};
+  DeferredDtor s{map};
+
+  EXPECT_EQ(map->at(1), 2);
+}
+
+namespace {
+class InitializerListConstructible {
+ public:
+  InitializerListConstructible(InitializerListConstructible&&) = default;
+  explicit InitializerListConstructible(std::initializer_list<int>) {}
+  InitializerListConstructible(std::initializer_list<double>, double) {}
+};
+} // namespace
+
+TEST_F(IndestructibleTest, initializer_list_in_place_initialization) {
+  using I = InitializerListConstructible;
+  std::ignore = Indestructible<I>{{1, 2, 3, 4}};
+  std::ignore = Indestructible<I>{{1.2}, 4.2};
+}
+
+namespace {
+class ExplicitlyMoveConstructible {
+ public:
+  ExplicitlyMoveConstructible() = default;
+  explicit ExplicitlyMoveConstructible(ExplicitlyMoveConstructible&&) = default;
+};
+} // namespace
+
+TEST_F(IndestructibleTest, list_initialization_explicit_implicit) {
+  using E = ExplicitlyMoveConstructible;
+  using I = std::map<int, int>;
+  EXPECT_TRUE((!std::is_convertible<E, Indestructible<E>>::value));
+  EXPECT_TRUE((std::is_convertible<I, Indestructible<I>>::value));
 }

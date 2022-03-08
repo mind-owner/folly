@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,15 +16,16 @@
 
 #pragma once
 
-#include <folly/Baton.h>
 #include <folly/Function.h>
 #include <folly/IndexedMemPool.h>
 #include <folly/Portability.h>
 #include <folly/concurrency/CacheLocality.h>
+#include <folly/synchronization/SaturatingSemaphore.h>
 
 #include <atomic>
 #include <cassert>
 #include <mutex>
+#include <thread>
 
 namespace folly {
 
@@ -111,10 +112,10 @@ class FlatCombining {
  public:
   /// Combining request record.
   class Rec {
-    FOLLY_ALIGN_TO_AVOID_FALSE_SHARING
-    folly::Baton<Atom, true, false> valid_;
-    folly::Baton<Atom, true, false> done_;
-    folly::Baton<Atom, true, false> disconnected_;
+    alignas(hardware_destructive_interference_size)
+        folly::SaturatingSemaphore<false, Atom> valid_;
+    folly::SaturatingSemaphore<false, Atom> done_;
+    folly::SaturatingSemaphore<false, Atom> disconnected_;
     size_t index_;
     size_t next_;
     uint64_t last_;
@@ -127,80 +128,46 @@ class FlatCombining {
       setDisconnected();
     }
 
-    void setValid() {
-      valid_.post();
-    }
+    void setValid() { valid_.post(); }
 
-    void clearValid() {
-      valid_.reset();
-    }
+    void clearValid() { valid_.reset(); }
 
-    bool isValid() const {
-      return valid_.try_wait();
-    }
+    bool isValid() const { return valid_.ready(); }
 
-    void setDone() {
-      done_.post();
-    }
+    void setDone() { done_.post(); }
 
-    void clearDone() {
-      done_.reset();
-    }
+    void clearDone() { done_.reset(); }
 
-    bool isDone() const {
-      return done_.try_wait();
-    }
+    bool isDone() const { return done_.ready(); }
 
-    void awaitDone() {
-      done_.wait();
-    }
+    void awaitDone() { done_.wait(); }
 
-    void setDisconnected() {
-      disconnected_.post();
-    }
+    void setDisconnected() { disconnected_.post(); }
 
-    void clearDisconnected() {
-      disconnected_.reset();
-    }
+    void clearDisconnected() { disconnected_.reset(); }
 
-    bool isDisconnected() const {
-      return disconnected_.try_wait();
-    }
+    bool isDisconnected() const { return disconnected_.ready(); }
 
-    void setIndex(const size_t index) {
-      index_ = index;
-    }
+    void setIndex(const size_t index) { index_ = index; }
 
-    size_t getIndex() const {
-      return index_;
-    }
+    size_t getIndex() const { return index_; }
 
-    void setNext(const size_t next) {
-      next_ = next;
-    }
+    void setNext(const size_t next) { next_ = next; }
 
-    size_t getNext() const {
-      return next_;
-    }
+    size_t getNext() const { return next_; }
 
-    void setLast(const uint64_t pass) {
-      last_ = pass;
-    }
+    void setLast(const uint64_t pass) { last_ = pass; }
 
-    uint64_t getLast() const {
-      return last_;
-    }
+    uint64_t getLast() const { return last_; }
 
-    Req& getReq() {
-      return req_;
-    }
+    Req& getReq() { return req_; }
 
     template <typename Func>
     void setFn(Func&& fn) {
       static_assert(
           std::is_nothrow_constructible<
               folly::Function<void()>,
-              _t<std::decay<Func>>>::value,
+              std::decay_t<Func>>::value,
           "Try using a smaller function object that can fit in folly::Function "
           "without allocation, or use the custom interface of requestFC() to "
           "manage the requested function's arguments and results explicitly "
@@ -214,9 +181,7 @@ class FlatCombining {
       assert(!fn_);
     }
 
-    SavedFn& getFn() {
-      return fn_;
-    }
+    SavedFn& getFn() { return fn_; }
 
     void complete() {
       clearValid();
@@ -274,19 +239,13 @@ class FlatCombining {
   }
 
   // Give the caller exclusive access.
-  void acquireExclusive() {
-    m_.lock();
-  }
+  void acquireExclusive() { m_.lock(); }
 
   // Try to give the caller exclusive access. Returns true iff successful.
-  bool tryExclusive() {
-    return m_.try_lock();
-  }
+  bool tryExclusive() { return m_.try_lock(); }
 
   // Release exclusive access. The caller must have exclusive access.
-  void releaseExclusive() {
-    m_.unlock();
-  }
+  void releaseExclusive() { m_.unlock(); }
 
   // Give the lock holder ownership of the mutex and exclusive access.
   // No need for explicit release.
@@ -395,24 +354,16 @@ class FlatCombining {
   }
 
   // Returns the number of uncombined operations so far.
-  uint64_t getNumUncombined() const {
-    return uncombined_;
-  }
+  uint64_t getNumUncombined() const { return uncombined_; }
 
   // Returns the number of combined operations so far.
-  uint64_t getNumCombined() const {
-    return combined_;
-  }
+  uint64_t getNumCombined() const { return combined_; }
 
   // Returns the number of combining passes so far.
-  uint64_t getNumPasses() const {
-    return passes_;
-  }
+  uint64_t getNumPasses() const { return passes_; }
 
   // Returns the number of combining sessions so far.
-  uint64_t getNumSessions() const {
-    return sessions_;
-  }
+  uint64_t getNumSessions() const { return sessions_; }
 
  protected:
   const size_t NULL_INDEX = 0;
@@ -420,23 +371,20 @@ class FlatCombining {
   const uint64_t kDefaultNumRecs = 64;
   const uint64_t kIdleThreshold = 10;
 
-  FOLLY_ALIGN_TO_AVOID_FALSE_SHARING
-  Mutex m_;
+  alignas(hardware_destructive_interference_size) Mutex m_;
 
-  FOLLY_ALIGN_TO_AVOID_FALSE_SHARING
-  folly::Baton<Atom, false, true> pending_;
+  alignas(hardware_destructive_interference_size)
+      folly::SaturatingSemaphore<true, Atom> pending_;
   Atom<bool> shutdown_{false};
 
-  FOLLY_ALIGN_TO_AVOID_FALSE_SHARING
-  uint32_t numRecs_;
+  alignas(hardware_destructive_interference_size) uint32_t numRecs_;
   uint32_t maxOps_;
   Atom<size_t> recs_;
   bool dedicated_;
   std::thread combiner_;
   Pool recsPool_;
 
-  FOLLY_ALIGN_TO_AVOID_FALSE_SHARING
-  uint64_t uncombined_ = 0;
+  alignas(hardware_destructive_interference_size) uint64_t uncombined_ = 0;
   uint64_t combined_ = 0;
   uint64_t passes_ = 0;
   uint64_t sessions_ = 0;
@@ -524,29 +472,17 @@ class FlatCombining {
     }
   }
 
-  size_t getRecsHead() {
-    return recs_.load(std::memory_order_acquire);
-  }
+  size_t getRecsHead() { return recs_.load(std::memory_order_acquire); }
 
-  size_t nextIndex(size_t idx) {
-    return recsPool_[idx].getNext();
-  }
+  size_t nextIndex(size_t idx) { return recsPool_[idx].getNext(); }
 
-  void clearPending() {
-    pending_.reset();
-  }
+  void clearPending() { pending_.reset(); }
 
-  void setPending() {
-    pending_.post();
-  }
+  void setPending() { pending_.post(); }
 
-  bool isPending() const {
-    return pending_.try_wait();
-  }
+  bool isPending() const { return pending_.ready(); }
 
-  void awaitPending() {
-    pending_.wait();
-  }
+  void awaitPending() { pending_.wait(); }
 
   uint64_t combiningSession() {
     uint64_t combined = 0;
@@ -679,4 +615,4 @@ class FlatCombining {
   }
 };
 
-} // namespace folly {
+} // namespace folly

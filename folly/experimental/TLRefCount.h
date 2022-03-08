@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,10 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/ThreadLocal.h>
-#include <folly/experimental/AsymmetricMemoryBarrier.h>
+#include <folly/synchronization/AsymmetricMemoryBarrier.h>
+#include <folly/synchronization/detail/Sleeper.h>
 
 namespace folly {
 
@@ -52,7 +54,7 @@ class TLRefCount {
       if (value == 0) {
         return 0;
       }
-    } while (!globalCount_.compare_exchange_weak(value, value+1));
+    } while (!globalCount_.compare_exchange_weak(value, value + 1));
 
     return value + 1;
   }
@@ -130,41 +132,49 @@ class TLRefCount {
   enum class State {
     LOCAL,
     GLOBAL_TRANSITION,
-    GLOBAL
+    GLOBAL,
   };
 
   class LocalRefCount {
    public:
-    explicit LocalRefCount(TLRefCount& refCount) :
-        refCount_(refCount) {
+    explicit LocalRefCount(TLRefCount& refCount) : refCount_(refCount) {
       std::lock_guard<std::mutex> lg(refCount.globalMutex_);
 
       collectGuard_ = refCount.collectGuard_;
     }
 
-    ~LocalRefCount() {
-      collect();
-    }
+    ~LocalRefCount() { collect(); }
 
     void collect() {
-      std::lock_guard<std::mutex> lg(collectMutex_);
+      {
+        std::lock_guard<std::mutex> lg(collectMutex_);
 
-      if (!collectGuard_) {
-        return;
+        if (!collectGuard_) {
+          return;
+        }
+
+        collectCount_ = count_.load();
+        refCount_.globalCount_.fetch_add(collectCount_);
+        collectGuard_.reset();
       }
-
-      collectCount_ = count_.load();
-      refCount_.globalCount_.fetch_add(collectCount_);
-      collectGuard_.reset();
+      // Once we exit collect(), it's possible TLRefCount may be deleted by our
+      // user since the global count may reach zero. We must therefore ensure
+      // that the thread corresponding to this LocalRefCount is not still
+      // executing the update() function. We wait on inUpdate_ to ensure this.
+      // We won't have to worry about further update() calls beyond this point,
+      // because the state is already non-LOCAL. We also don't need to worry
+      // about if a thread is in an update() call but have not gotten around to
+      // setting inUpdate_ to true yet, because then count_ has also not been
+      // updated and we couldn't reach global zero in that case.
+      folly::detail::Sleeper sleeper;
+      while (inUpdate_.load(std::memory_order_acquire)) {
+        sleeper.wait();
+      }
     }
 
-    bool operator++() {
-      return update(1);
-    }
+    bool operator++() { return update(1); }
 
-    bool operator--() {
-      return update(-1);
-    }
+    bool operator--() { return update(-1); }
 
    private:
     bool update(Int delta) {
@@ -177,7 +187,9 @@ class TLRefCount {
       // makes things faster than atomic fetch_add on platforms with native
       // support.
       auto count = count_.load(std::memory_order_relaxed) + delta;
-      count_.store(count, std::memory_order_relaxed);
+      inUpdate_.store(true, std::memory_order_relaxed);
+      SCOPE_EXIT { inUpdate_.store(false, std::memory_order_release); };
+      count_.store(count, std::memory_order_release);
 
       asymmetricLightBarrier();
 
@@ -196,6 +208,7 @@ class TLRefCount {
     }
 
     AtomicInt count_{0};
+    std::atomic<bool> inUpdate_{false};
     TLRefCount& refCount_;
 
     std::mutex collectMutex_;
@@ -210,4 +223,4 @@ class TLRefCount {
   std::shared_ptr<void> collectGuard_;
 };
 
-}
+} // namespace folly

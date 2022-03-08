@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -49,6 +49,7 @@ class File {
 
   /**
    * Open and create a file object.  Throws on error.
+   * Owns the file descriptor implicitly.
    */
   explicit File(const char* name, int flags = O_RDONLY, mode_t mode = 0666);
   explicit File(
@@ -64,8 +65,8 @@ class File {
   static Expected<File, exception_wrapper> makeFile(Args&&... args) noexcept {
     try {
       return File(std::forward<Args>(args)...);
-    } catch (const std::system_error& se) {
-      return makeUnexpected(exception_wrapper(std::current_exception(), se));
+    } catch (const std::system_error&) {
+      return makeUnexpected(exception_wrapper(std::current_exception()));
     }
   }
 
@@ -84,14 +85,23 @@ class File {
   /**
    * Returns 'true' iff the file was successfully opened.
    */
-  explicit operator bool() const {
-    return fd_ != -1;
-  }
+  explicit operator bool() const { return fd_ != -1; }
 
   /**
    * Duplicate file descriptor and return File that owns it.
+   *
+   * Duplicated file descriptor does not have close-on-exec flag set,
+   * so it is leaked to child processes. Consider using "dupCloseOnExec".
    */
   File dup() const;
+
+  /**
+   * Duplicate file descriptor and return File that owns it.
+   *
+   * This functions creates a descriptor with close-on-exec flag set
+   * (where supported, otherwise it is equivalent to "dup").
+   */
+  File dupCloseOnExec() const;
 
   /**
    * If we own the file descriptor, close the file and throw on error.
@@ -114,7 +124,7 @@ class File {
   /**
    * Swap this File with another.
    */
-  void swap(File& other);
+  void swap(File& other) noexcept;
 
   // movable
   File(File&&) noexcept;
@@ -148,7 +158,6 @@ class File {
   bool ownsFd_;
 };
 
-void swap(File& a, File& b);
+void swap(File& a, File& b) noexcept;
 
-
-}  // namespace folly
+} // namespace folly

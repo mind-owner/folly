@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "Bser.h"
-#include <folly/io/Cursor.h>
+
+#include <folly/experimental/bser/Bser.h>
+
 #include <folly/String.h>
+#include <folly/io/Cursor.h>
 
 using namespace folly;
 using folly::io::Cursor;
@@ -26,10 +28,11 @@ static dynamic parseBser(Cursor& curs);
 
 template <typename... ARGS>
 [[noreturn]] static void throwDecodeError(Cursor& curs, ARGS&&... args) {
-  throw BserDecodeError(folly::to<std::string>(std::forward<ARGS>(args)...,
-                                               " with ",
-                                               curs.length(),
-                                               " bytes remaining in cursor"));
+  throw BserDecodeError(folly::to<std::string>(
+      std::forward<ARGS>(args)...,
+      " with ",
+      curs.length(),
+      " bytes remaining in cursor"));
 }
 
 static int64_t decodeInt(Cursor& curs) {
@@ -43,6 +46,15 @@ static int64_t decodeInt(Cursor& curs) {
       return curs.read<int32_t>();
     case BserType::Int64:
       return curs.read<int64_t>();
+    case BserType::Array:
+    case BserType::Object:
+    case BserType::String:
+    case BserType::Real:
+    case BserType::True:
+    case BserType::False:
+    case BserType::Null:
+    case BserType::Template:
+    case BserType::Skip:
     default:
       throwDecodeError(
           curs, "invalid integer encoding detected (", (int8_t)enc, ")");
@@ -56,25 +68,24 @@ static std::string decodeString(Cursor& curs) {
   if (len < 0) {
     throw std::range_error("string length must not be negative");
   }
-  str.reserve(size_t(len));
 
-  size_t available = curs.length();
-  while (available < (size_t)len) {
-    if (available == 0) {
-      // Saw this case when we decodeHeader was returning the incorrect length
-      // and we were splitting off too few bytes from the IOBufQueue
-      throwDecodeError(curs,
-                       "no data available while decoding a string, header was "
-                       "not decoded properly");
-    }
-    str.append(reinterpret_cast<const char*>(curs.data()), available);
-    curs.skipAtMost(available);
-    len -= available;
-    available = curs.length();
+  // We could use Cursor::readFixedString() here, but we'd like
+  // to throw our own exception with some increased diagnostics.
+  str.resize(len);
+
+  // The start of the string data, mutable.
+  auto* dest = &str[0];
+
+  auto pulled = curs.pullAtMost(dest, len);
+  if (pulled != size_t(len)) {
+    // Saw this case when decodeHeader was returning the incorrect length
+    // and we were splitting off too few bytes from the IOBufQueue
+    throwDecodeError(
+        curs,
+        "no data available while decoding a string, header was "
+        "not decoded properly");
   }
 
-  str.append(reinterpret_cast<const char*>(curs.data()), size_t(len));
-  curs.skipAtMost(size_t(len));
   return str;
 }
 
@@ -95,7 +106,8 @@ static dynamic decodeObject(Cursor& curs) {
       throwDecodeError(curs, "expected String");
     }
     auto key = decodeString(curs);
-    obj[key] = parseBser(curs);
+    auto keyv = StringPiece(key); // to evade MSVC C4866
+    obj[keyv] = parseBser(curs);
   }
   return obj;
 }
@@ -115,14 +127,15 @@ static dynamic decodeTemplate(Cursor& curs) {
     dynamic obj = dynamic::object;
 
     for (auto& name : names) {
+      StringPiece keyv = name.getString(); // to evade MSVC C4866
       auto bytes = curs.peekBytes();
       if ((BserType)bytes.at(0) == BserType::Skip) {
-        obj[name.getString()] = nullptr;
+        obj[keyv] = nullptr;
         curs.skipAtMost(1);
         continue;
       }
 
-      obj[name.getString()] = parseBser(curs);
+      obj[keyv] = parseBser(curs);
     }
 
     arr.push_back(std::move(obj));
@@ -190,6 +203,15 @@ static size_t decodeHeader(Cursor& curs) {
     case BserType::Int64:
       int_size = 8;
       break;
+    case BserType::Array:
+    case BserType::Object:
+    case BserType::String:
+    case BserType::Real:
+    case BserType::True:
+    case BserType::False:
+    case BserType::Null:
+    case BserType::Template:
+    case BserType::Skip:
     default:
       int_size = 0;
   }
@@ -217,8 +239,8 @@ folly::dynamic parseBser(ByteRange str) {
 folly::dynamic parseBser(StringPiece str) {
   return parseBser(ByteRange((uint8_t*)str.data(), str.size()));
 }
-}
-}
+} // namespace bser
+} // namespace folly
 
 /* vim:ts=2:sw=2:et:
  */

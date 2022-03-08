@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -32,7 +32,7 @@
 namespace folly {
 
 struct HugePageSize : private boost::totally_ordered<HugePageSize> {
-  explicit HugePageSize(size_t s) : size(s) { }
+  explicit HugePageSize(size_t s) : size(s) {}
 
   fs::path filePath(const fs::path& relpath) const {
     return mountPoint / relpath;
@@ -77,4 +77,4 @@ const HugePageSize* getHugePageSize(size_t size = 0);
  */
 const HugePageSize* getHugePageSizeForDevice(dev_t device);
 
-}  // namespace folly
+} // namespace folly

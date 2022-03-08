@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <folly/tracing/StaticTracepoint.h>
+
 #include <algorithm>
 #include <array>
 #include <iterator>
@@ -21,16 +23,19 @@
 #include <string>
 #include <vector>
 
-#include <boost/filesystem.hpp>
-#include <folly/Bits.h>
 #include <folly/Conv.h>
 #include <folly/Format.h>
 #include <folly/Random.h>
 #include <folly/String.h>
 #include <folly/Subprocess.h>
+#include <folly/experimental/symbolizer/detail/Debug.h>
+#include <folly/lang/Bits.h>
+#include <folly/portability/Filesystem.h>
 #include <folly/portability/GTest.h>
 #include <folly/portability/Unistd.h>
-#include <folly/tracing/StaticTracepoint.h>
+#include <folly/tracing/test/StaticTracepointTestModule.h>
+
+#if FOLLY_HAVE_SDT
 
 static const std::string kUSDTSubsectionName = FOLLY_SDT_NOTE_NAME;
 static const int kUSDTNoteType = FOLLY_SDT_NOTE_TYPE;
@@ -55,9 +60,7 @@ static void align4Bytes(size_t& pos) {
 }
 
 static int getNextZero(
-    const std::vector<uint8_t>& v,
-    const size_t curPos,
-    const size_t limit) {
+    const std::vector<uint8_t>& v, const size_t curPos, const size_t limit) {
   auto pos = std::find(v.begin() + curPos, v.begin() + limit, 0);
   if (pos == v.begin() + limit) {
     return -1;
@@ -71,8 +74,8 @@ static intptr_t getAddr(const std::vector<uint8_t>& v, size_t& pos) {
       folly::loadUnaligned<intptr_t>(v.data() + pos - kAddrWidth));
 }
 
-static std::string
-getStr(const std::vector<uint8_t>& v, size_t& pos, const size_t len) {
+static std::string getStr(
+    const std::vector<uint8_t>& v, size_t& pos, const size_t len) {
   CHECK_GE(len, 1);
   std::string res;
   res.resize(len - 1);
@@ -87,7 +90,7 @@ getStr(const std::vector<uint8_t>& v, size_t& pos, const size_t len) {
 
 static std::string getExe() {
   auto path = folly::sformat("/proc/{}/exe", getpid());
-  return boost::filesystem::read_symlink(path).string();
+  return folly::fs::read_symlink(path).string();
 }
 
 static std::string getNoteRawContent(const std::string& fileName) {
@@ -145,8 +148,7 @@ static std::vector<uint8_t> readNote(const std::string& fileName) {
 
 template <std::size_t SIZE>
 static void checkTracepointArguments(
-    const std::string& arguments,
-    std::array<int, SIZE>& expectedSize) {
+    const std::string& arguments, std::array<int, SIZE>& expectedSize) {
   std::vector<std::string> args;
   folly::split(' ', arguments, args);
   EXPECT_EQ(expectedSize.size(), args.size());
@@ -169,6 +171,7 @@ static void checkTracepointArguments(
 static bool getTracepointArguments(
     const std::string& expectedProvider,
     const std::string& expectedProbe,
+    const uintptr_t expectedSemaphore,
     std::string& arguments) {
   // Read the note and check if it's non-empty.
   std::string exe = getExe();
@@ -203,12 +206,11 @@ static bool getTracepointArguments(
     CHECK_GT(probeAddr, 0);
     remaining -= kAddrWidth;
 
-    intptr_t semaphoreAddr = getAddr(note, pos);
-    CHECK_EQ(0, semaphoreAddr);
+    intptr_t baseAddr = getAddr(note, pos);
+    CHECK_EQ(0, baseAddr);
     remaining -= kAddrWidth;
 
-    intptr_t semaphoreBase = getAddr(note, pos);
-    CHECK_EQ(0, semaphoreBase);
+    intptr_t semaphoreAddr = getAddr(note, pos);
     remaining -= kAddrWidth;
 
     // Read tracepoint provider, probe and argument layout description.
@@ -228,17 +230,26 @@ static bool getTracepointArguments(
     align4Bytes(pos);
 
     if (provider == expectedProvider && probe == expectedProbe) {
+      // If the binary is not PIE, then the addresses should match.
+      if (expectedSemaphore == static_cast<uintptr_t>(semaphoreAddr)) {
+        return true;
+      }
+      // If the test is built as PIE, then the semaphore address listed in the
+      // notes section is relative to the beginning of the binary image.
+      auto binaryOffset =
+          folly::symbolizer::detail::get_r_debug()->r_map->l_addr;
+      CHECK_EQ(expectedSemaphore, binaryOffset + semaphoreAddr);
       return true;
     }
   }
   return false;
 }
 
-static int arrayTestFunc() {
-  int v1 = folly::Random::rand32();
-  int v2 = folly::Random::rand32();
-  int64_t v3 = v1 + v2;
-  int a[4] = {v1, v2, v1, v2};
+static uint32_t arrayTestFunc() {
+  uint32_t v1 = folly::Random::rand32();
+  uint32_t v2 = folly::Random::rand32();
+  uint64_t v3 = v1 + v2;
+  uint32_t a[4] = {v1, v2, v1, v2};
   FOLLY_SDT(folly, test_static_tracepoint_array, a, v1, v3);
   return v1 + v2;
 }
@@ -248,14 +259,14 @@ TEST(StaticTracepoint, TestArray) {
 
   std::string arguments;
   ASSERT_TRUE(getTracepointArguments(
-      "folly", "test_static_tracepoint_array", arguments));
+      "folly", "test_static_tracepoint_array", 0, arguments));
   std::array<int, 3> expected{{sizeof(void*), sizeof(int), sizeof(int64_t)}};
   checkTracepointArguments(arguments, expected);
 }
 
-static int pointerTestFunc() {
-  int v1 = folly::Random::rand32();
-  int v2 = folly::Random::rand32();
+static uint32_t pointerTestFunc() {
+  uint32_t v1 = folly::Random::rand32();
+  uint32_t v2 = folly::Random::rand32();
   std::string str = "test string";
   const char* a = str.c_str();
   FOLLY_SDT(folly, test_static_tracepoint_pointer, a, v2, &v1);
@@ -267,7 +278,7 @@ TEST(StaticTracepoint, TestPointer) {
 
   std::string arguments;
   ASSERT_TRUE(getTracepointArguments(
-      "folly", "test_static_tracepoint_array", arguments));
+      "folly", "test_static_tracepoint_array", 0, arguments));
   std::array<int, 3> expected{{sizeof(void*), sizeof(int), sizeof(void*)}};
   checkTracepointArguments(arguments, expected);
 }
@@ -281,11 +292,13 @@ TEST(StaticTracepoint, TestEmpty) {
 
   std::string arguments;
   ASSERT_TRUE(getTracepointArguments(
-      "folly", "test_static_tracepoint_empty", arguments));
+      "folly", "test_static_tracepoint_empty", 0, arguments));
   EXPECT_TRUE(arguments.empty());
 }
 
-static int manyArgTypesTestFunc() {
+FOLLY_SDT_DEFINE_SEMAPHORE(folly, test_semaphore_local)
+
+static uint32_t manyArgTypesTestFunc() {
   uint32_t a = folly::Random::rand32();
   uint32_t b = folly::Random::rand32();
   bool bool_ = (a % 2) == (b % 2);
@@ -305,6 +318,7 @@ static int manyArgTypesTestFunc() {
       long_,
       float_,
       double_);
+  FOLLY_SDT_WITH_SEMAPHORE(folly, test_semaphore_local, long_, short_);
   return a + b;
 }
 
@@ -313,7 +327,7 @@ TEST(StaticTracepoint, TestManyArgTypes) {
 
   std::string arguments;
   ASSERT_TRUE(getTracepointArguments(
-      "folly", "test_static_tracepoint_many_arg_types", arguments));
+      "folly", "test_static_tracepoint_many_arg_types", 0, arguments));
   std::array<int, 8> expected{{
       sizeof(uint32_t),
       sizeof(uint32_t),
@@ -327,7 +341,7 @@ TEST(StaticTracepoint, TestManyArgTypes) {
   checkTracepointArguments(arguments, expected);
 }
 
-FOLLY_ALWAYS_INLINE static int alwaysInlineTestFunc() {
+FOLLY_ALWAYS_INLINE static uint32_t alwaysInlineTestFunc() {
   uint32_t a = folly::Random::rand32();
   uint32_t b = folly::Random::rand32();
   FOLLY_SDT(folly, test_static_tracepoint_always_inline, a, b);
@@ -339,14 +353,14 @@ TEST(StaticTracepoint, TestAlwaysInline) {
 
   std::string arguments;
   ASSERT_TRUE(getTracepointArguments(
-      "folly", "test_static_tracepoint_always_inline", arguments));
+      "folly", "test_static_tracepoint_always_inline", 0, arguments));
   std::array<int, 2> expected{{sizeof(uint32_t), sizeof(uint32_t)}};
   checkTracepointArguments(arguments, expected);
 }
 
 static void branchTestFunc() {
   uint32_t a = folly::Random::rand32();
-  uint32_t b = folly::Random::rand32();
+  uint32_t b = std::max(1u, folly::Random::rand32());
   if (a > b) {
     FOLLY_SDT(folly, test_static_tracepoint_branch_1, a / b);
   } else {
@@ -359,13 +373,13 @@ TEST(StaticTracepoint, TestBranch) {
 
   std::string arguments1;
   ASSERT_TRUE(getTracepointArguments(
-      "folly", "test_static_tracepoint_branch_1", arguments1));
+      "folly", "test_static_tracepoint_branch_1", 0, arguments1));
   std::array<int, 1> expected1{{sizeof(uint32_t)}};
   checkTracepointArguments(arguments1, expected1);
 
   std::string arguments2;
   ASSERT_TRUE(getTracepointArguments(
-      "folly", "test_static_tracepoint_branch_2", arguments2));
+      "folly", "test_static_tracepoint_branch_2", 0, arguments2));
   std::array<int, 1> expected2{{sizeof(double)}};
   checkTracepointArguments(arguments2, expected2);
 }
@@ -390,7 +404,31 @@ TEST(StaticTracepoint, TestStruct) {
 
   std::string arguments;
   ASSERT_TRUE(getTracepointArguments(
-      "folly", "test_static_tracepoint_struct", arguments));
+      "folly", "test_static_tracepoint_struct", 0, arguments));
   std::array<int, 2> expected{{sizeof(testStruct), sizeof(testStruct)}};
   checkTracepointArguments(arguments, expected);
 }
+
+TEST(StaticTracepoint, TestSemaphoreLocal) {
+  manyArgTypesTestFunc();
+
+  std::string arguments;
+  ASSERT_TRUE(getTracepointArguments(
+      "folly",
+      "test_semaphore_local",
+      (uintptr_t)((void*)&FOLLY_SDT_SEMAPHORE(folly, test_semaphore_local)),
+      arguments));
+  std::array<int, 2> expected{{sizeof(long), sizeof(short)}};
+  checkTracepointArguments(arguments, expected);
+  EXPECT_FALSE(FOLLY_SDT_IS_ENABLED(folly, test_semaphore_local));
+}
+
+FOLLY_SDT_DECLARE_SEMAPHORE(folly, test_semaphore_extern);
+
+TEST(StaticTracepoint, TestSemaphoreExtern) {
+  unsigned v = folly::Random::rand32();
+  CHECK_EQ(v * v, folly::test::staticTracepointTestFunc(v));
+  EXPECT_FALSE(FOLLY_SDT_IS_ENABLED(folly, test_semaphore_extern));
+}
+
+#endif

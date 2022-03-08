@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,14 +16,12 @@
 
 #include <folly/SpinLock.h>
 
-#include <folly/Random.h>
-
 #include <thread>
 
+#include <folly/Random.h>
 #include <folly/portability/Asm.h>
+#include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
-
-using folly::SpinLockGuardImpl;
 
 namespace {
 
@@ -32,9 +30,7 @@ struct LockedVal {
   int ar[1024];
   LOCK lock;
 
-  LockedVal() {
-    memset(ar, 0, sizeof ar);
-  }
+  LockedVal() { memset(ar, 0, sizeof ar); }
 };
 
 template <typename LOCK>
@@ -43,12 +39,9 @@ void spinlockTestThread(LockedVal<LOCK>* v) {
   auto rng = folly::ThreadLocalPRNG();
   for (int i = 0; i < max; i++) {
     folly::asm_volatile_pause();
-    SpinLockGuardImpl<LOCK> g(v->lock);
+    std::unique_lock g(v->lock);
 
-    int first = v->ar[0];
-    for (size_t j = 1; j < sizeof v->ar / sizeof j; ++j) {
-      EXPECT_EQ(first, v->ar[j]);
-    }
+    EXPECT_THAT(v->ar, testing::Each(testing::Eq(v->ar[0])));
 
     int byte = folly::Random::rand32(rng);
     memset(v->ar, char(byte), sizeof v->ar);
@@ -69,14 +62,13 @@ void trylockTestThread(TryLockState<LOCK>* state, size_t count) {
   while (true) {
     folly::asm_volatile_pause();
     bool ret = state->lock2.try_lock();
-    SpinLockGuardImpl<LOCK> g(state->lock1);
+    std::unique_lock g(state->lock1);
     if (state->obtained >= count) {
       if (ret) {
         state->lock2.unlock();
       }
       break;
     }
-
 
     if (ret) {
       // We got lock2.
@@ -134,7 +126,7 @@ void trylockTest() {
   EXPECT_GE(state.failed + 1, state.obtained);
 }
 
-} // unnamed namespace
+} // namespace
 
 TEST(SpinLock, Correctness) {
   correctnessTest<folly::SpinLock>();

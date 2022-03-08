@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,13 +20,12 @@
 #include <memory>
 #include <mutex>
 
-#include <folly/Baton.h>
 #include <folly/experimental/flat_combining/FlatCombining.h>
+#include <folly/synchronization/Baton.h>
 
 namespace folly {
 
-struct Line {
-  FOLLY_ALIGN_TO_AVOID_FALSE_SHARING
+struct alignas(hardware_destructive_interference_size) Line {
   uint64_t val_;
 };
 
@@ -86,9 +85,7 @@ class FcSimpleExample
       uint32_t maxOps = 0)
       : FC(dedicated, numRecs, maxOps), data_(size) {}
 
-  uint64_t getVal() {
-    return data_.getVal();
-  }
+  uint64_t getVal() { return data_.getVal(); }
 
   // add
 
@@ -129,29 +126,17 @@ class Req {
  public:
   enum class Type { ADD, FETCHADD };
 
-  void setType(Type type) {
-    type_ = type;
-  }
+  void setType(Type type) { type_ = type; }
 
-  Type getType() {
-    return type_;
-  }
+  Type getType() { return type_; }
 
-  void setVal(uint64_t val) {
-    val_ = val;
-  }
+  void setVal(uint64_t val) { val_ = val; }
 
-  uint64_t getVal() {
-    return val_;
-  }
+  uint64_t getVal() { return val_; }
 
-  void setRes(uint64_t res) {
-    res_ = res;
-  }
+  void setRes(uint64_t res) { res_ = res; }
 
-  uint64_t getRes() {
-    return res_;
-  }
+  uint64_t getRes() { return res_; }
 
  private:
   Type type_;
@@ -179,9 +164,7 @@ class FcCustomExample : public FlatCombining<
       uint32_t maxOps = 0)
       : FC(dedicated, numRecs, maxOps), data_(size) {}
 
-  uint64_t getVal() {
-    return data_.getVal();
-  }
+  uint64_t getVal() { return data_.getVal(); }
 
   // add
 
@@ -222,18 +205,18 @@ class FcCustomExample : public FlatCombining<
   // custom combined op processing - overrides FlatCombining::combinedOp(Req&)
   void combinedOp(Req& req) {
     switch (req.getType()) {
-      case Req::Type::ADD: {
+      case Req::Type::ADD:
         data_.add(req.getVal());
-      } break;
-      case Req::Type::FETCHADD: {
+        return;
+      case Req::Type::FETCHADD:
         req.setRes(data_.fetchAdd(req.getVal()));
-      } break;
-      default: { assert(false); }
+        return;
     }
+    assume_unreachable();
   }
 
  private:
   Data data_;
 };
 
-} // namespace folly {
+} // namespace folly

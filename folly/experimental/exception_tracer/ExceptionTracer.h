@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -24,21 +24,23 @@
 #include <typeinfo>
 #include <vector>
 
+#include <folly/portability/Config.h>
+
+#if FOLLY_HAVE_ELF && FOLLY_HAVE_DWARF
+
 namespace folly {
 namespace exception_tracer {
 
 struct ExceptionInfo {
-  const std::type_info* type;
+  const std::type_info* type{nullptr};
   // The values in frames are IP (instruction pointer) addresses.
   // They are only filled if the low-level exception tracer library is
   // linked in or LD_PRELOADed.
-  std::vector<uintptr_t> frames;  // front() is top of stack
+  std::vector<uintptr_t> frames; // front() is top of stack
 };
 
 void printExceptionInfo(
-    std::ostream& out,
-    const ExceptionInfo& info,
-    int options);
+    std::ostream& out, const ExceptionInfo& info, int options);
 std::ostream& operator<<(std::ostream& out, const ExceptionInfo& info);
 
 /**
@@ -52,5 +54,7 @@ std::vector<ExceptionInfo> getCurrentExceptions();
  */
 void installHandlers();
 
-}  // namespace exception_tracer
-}  // namespace folly
+} // namespace exception_tracer
+} // namespace folly
+
+#endif // FOLLY_HAVE_ELF && FOLLY_HAVE_DWARF

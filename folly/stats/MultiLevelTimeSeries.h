@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,9 +21,10 @@
 #include <string>
 #include <vector>
 
+#include <glog/logging.h>
+
 #include <folly/String.h>
 #include <folly/stats/BucketedTimeSeries.h>
-#include <glog/logging.h>
 
 namespace folly {
 
@@ -70,13 +71,10 @@ class MultiLevelTimeSeries {
    * an all-time level is provided, it MUST be the last level present.
    */
   MultiLevelTimeSeries(
-      size_t numBuckets,
-      size_t numLevels,
-      const Duration levelDurations[]);
+      size_t numBuckets, size_t numLevels, const Duration levelDurations[]);
 
   MultiLevelTimeSeries(
-      size_t numBuckets,
-      std::initializer_list<Duration> durations);
+      size_t numBuckets, std::initializer_list<Duration> durations);
 
   /*
    * Return the number of buckets used to track time series at each level.
@@ -89,9 +87,7 @@ class MultiLevelTimeSeries {
   /*
    * Return the number of levels tracked by MultiLevelTimeSeries.
    */
-  size_t numLevels() const {
-    return levels_.size();
-  }
+  size_t numLevels() const { return levels_.size(); }
 
   /*
    * Get the BucketedTimeSeries backing the specified level.
@@ -159,9 +155,7 @@ class MultiLevelTimeSeries {
    * data. Otherwise you may be reading stale data if update() or flush() has
    * not been called recently.
    */
-  ValueType sum(size_t level) const {
-    return getLevel(level).sum();
-  }
+  ValueType sum(size_t level) const { return getLevel(level).sum(); }
 
   /*
    * Return the average (sum / count) of all the data points currently tracked
@@ -199,9 +193,7 @@ class MultiLevelTimeSeries {
    * data. Otherwise you may be reading stale data if update() or flush() has
    * not been called recently.
    */
-  uint64_t count(size_t level) const {
-    return getLevel(level).count();
-  }
+  uint64_t count(size_t level) const { return getLevel(level).count(); }
 
   /*
    * Return the count divided by the elapsed time tracked at this level.
@@ -381,8 +373,8 @@ class MultiLevelTimeSeries {
    * Adds the value 'total' at time 'now' to all levels as the sum of
    * 'nsamples' samples.
    */
-  void
-  addValueAggregated(TimePoint now, const ValueType& total, uint64_t nsamples);
+  void addValueAggregated(
+      TimePoint now, const ValueType& total, uint64_t nsamples);
 
   /*
    * Update all the levels to the specified time, doing all the necessary
@@ -412,17 +404,15 @@ class MultiLevelTimeSeries {
    * Prefer using the correct TimePoint-based APIs instead.  These APIs will
    * eventually be deprecated and removed.
    */
-  void update(Duration now) {
-    update(TimePoint(now));
-  }
+  void update(Duration now) { update(TimePoint(now)); }
   void addValue(Duration now, const ValueType& value) {
     addValue(TimePoint(now), value);
   }
   void addValue(Duration now, const ValueType& value, uint64_t times) {
     addValue(TimePoint(now), value, times);
   }
-  void
-  addValueAggregated(Duration now, const ValueType& total, uint64_t nsamples) {
+  void addValueAggregated(
+      Duration now, const ValueType& total, uint64_t nsamples) {
     addValueAggregated(TimePoint(now), total, nsamples);
   }
 
@@ -437,4 +427,6 @@ class MultiLevelTimeSeries {
   uint64_t cachedCount_;
 };
 
-} // folly
+} // namespace folly
+
+#include <folly/stats/MultiLevelTimeSeries-inl.h>

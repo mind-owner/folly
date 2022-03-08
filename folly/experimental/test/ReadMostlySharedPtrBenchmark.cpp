@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/* -*- Mode: C++; tab-width: 2; c-basic-offset: 2; indent-tabs-mode: nil -*- */
 
 #include <folly/experimental/ReadMostlySharedPtr.h>
 
@@ -22,12 +21,14 @@
 
 #include <folly/Benchmark.h>
 #include <folly/Memory.h>
-#include <folly/experimental/RCURefCount.h>
 #include <folly/portability/GFlags.h>
 
-template <template<typename> class MainPtr,
-          template<typename> class WeakPtr,
-          size_t threadCount>
+template <
+    template <typename>
+    class MainPtr,
+    template <typename>
+    class WeakPtr,
+    size_t threadCount>
 void benchmark(size_t n) {
   MainPtr<int> mainPtr(std::make_unique<int>(42));
 
@@ -35,60 +36,101 @@ void benchmark(size_t n) {
 
   for (size_t t = 0; t < threadCount; ++t) {
     ts.emplace_back([&]() {
-        WeakPtr<int> weakPtr(mainPtr);
-        // Prevent the compiler from hoisting code out of the loop.
-        auto op = [&]() FOLLY_NOINLINE { weakPtr.lock(); };
+      WeakPtr<int> weakPtr(mainPtr);
+      // Prevent the compiler from hoisting code out of the loop.
+      auto op = [&]() FOLLY_NOINLINE { weakPtr.lock(); };
 
-        for (size_t i = 0; i < n; ++i) {
-          op();
-        }
-      });
+      for (size_t i = 0; i < n; ++i) {
+        op();
+      }
+    });
   }
 
-  for (auto& t: ts) {
+  for (auto& t : ts) {
     t.join();
   }
 }
 
-template <typename T>
-using RCUMainPtr = folly::ReadMostlyMainPtr<T, folly::RCURefCount>;
-template <typename T>
-using RCUWeakPtr = folly::ReadMostlyWeakPtr<T, folly::RCURefCount>;
+template <template <typename> class MainPtr>
+void constructorBenchmark(size_t n) {
+  folly::BenchmarkSuspender braces;
+  using deleter_fn = folly::identity_fn; // noop deleter
+  using uptr = std::unique_ptr<int, deleter_fn>;
+  int data = 42;
+  std::vector<MainPtr<int>> ptrs;
+  ptrs.reserve(n);
+
+  // Only measure the cost of constructing the MainPtr
+  braces.dismissing([&] {
+    for (size_t i = 0; i < n; ++i) {
+      ptrs.push_back(MainPtr<int>(uptr(&data)));
+    }
+  });
+}
+
+template <template <typename> class MainPtr>
+void destructorBenchmark(size_t n) {
+  folly::BenchmarkSuspender braces;
+  std::vector<MainPtr<int>> ptrs;
+  using deleter_fn = folly::identity_fn; // noop deleter
+  using uptr = std::unique_ptr<int, deleter_fn>;
+  int data = 42;
+
+  ptrs.reserve(n);
+  for (size_t i = 0; i < n; ++i) {
+    ptrs.push_back(MainPtr<int>(uptr(&data)));
+  }
+  // We only want to measure cost of destructing the MainPtr
+  braces.dismissing([&] { ptrs.clear(); });
+}
+
 template <typename T>
 using TLMainPtr = folly::ReadMostlyMainPtr<T, folly::TLRefCount>;
 template <typename T>
 using TLWeakPtr = folly::ReadMostlyWeakPtr<T, folly::TLRefCount>;
 
-
 BENCHMARK(WeakPtrOneThread, n) {
   benchmark<std::shared_ptr, std::weak_ptr, 1>(n);
+}
+
+BENCHMARK_RELATIVE(TLReadMostlyWeakPtrOneThread, n) {
+  benchmark<TLMainPtr, TLWeakPtr, 1>(n);
 }
 
 BENCHMARK(WeakPtrFourThreads, n) {
   benchmark<std::shared_ptr, std::weak_ptr, 4>(n);
 }
 
-BENCHMARK(RCUReadMostlyWeakPtrOneThread, n) {
-  benchmark<RCUMainPtr, RCUWeakPtr, 1>(n);
-}
-
-BENCHMARK(RCUReadMostlyWeakPtrFourThreads, n) {
-  benchmark<RCUMainPtr, RCUWeakPtr, 4>(n);
-}
-
-BENCHMARK(TLReadMostlyWeakPtrOneThread, n) {
-  benchmark<TLMainPtr, TLWeakPtr, 1>(n);
-}
-
-BENCHMARK(TLReadMostlyWeakPtrFourThreads, n) {
+BENCHMARK_RELATIVE(TLReadMostlyWeakPtrFourThreads, n) {
   benchmark<TLMainPtr, TLWeakPtr, 4>(n);
+}
+
+/**
+ * ReadMostlyMainPtr construction/destruction is significantly more expensive
+ * than std::shared_ptr. You should consider using ReadMostly pointers if the
+ * MainPtr is created infrequently but shared pointers are copied frequently.
+ */
+
+BENCHMARK(SharedPtrCtor, n) {
+  constructorBenchmark<std::shared_ptr>(n);
+}
+
+BENCHMARK_RELATIVE(TLReadMostlyMainPtrCtor, n) {
+  constructorBenchmark<TLMainPtr>(n);
+}
+
+BENCHMARK(SharedPtrDtor, n) {
+  destructorBenchmark<std::shared_ptr>(n);
+}
+
+BENCHMARK_RELATIVE(TLReadMostlyMainPtrDtor, n) {
+  destructorBenchmark<TLMainPtr>(n);
 }
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   gflags::SetCommandLineOptionWithMode(
-    "bm_min_usec", "100000", gflags::SET_FLAG_IF_DEFAULT
-  );
+      "bm_min_usec", "100000", gflags::SET_FLAG_IF_DEFAULT);
 
   folly::runBenchmarks();
 

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,11 +16,14 @@
 
 #pragma once
 
-#include <string>
 #include <sys/types.h>
+
+#include <string>
+
 #include <folly/portability/Sockets.h>
 
-namespace folly { namespace detail {
+namespace folly {
+namespace detail {
 
 std::string familyNameStrDefault(sa_family_t family);
 
@@ -42,13 +45,13 @@ inline std::string familyNameStr(sa_family_t family) {
 [[noreturn]] void getNthMSBitImplThrow(size_t bitCount, sa_family_t family);
 
 template <typename IPAddrType>
-inline bool
-getNthMSBitImpl(const IPAddrType& ip, size_t bitIndex, sa_family_t family) {
+inline bool getNthMSBitImpl(
+    const IPAddrType& ip, size_t bitIndex, sa_family_t family) {
   if (bitIndex >= ip.bitCount()) {
     getNthMSBitImplThrow(ip.bitCount(), family);
   }
-  //Underlying bytes are in n/w byte order
+  // Underlying bytes are in n/w byte order
   return (ip.getNthMSByte(bitIndex / 8) & (0x80 >> (bitIndex % 8))) != 0;
 }
-
-}}  // folly::detail
+} // namespace detail
+} // namespace folly

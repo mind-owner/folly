@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,7 +17,6 @@
 #include <folly/stats/Histogram.h>
 
 #include <folly/portability/GTest.h>
-#include <folly/stats/Histogram-defs.h>
 
 using folly::Histogram;
 
@@ -200,7 +199,7 @@ TEST(Histogram, TestDoubleWidthTooBig) {
   EXPECT_EQ(1, h.getBucketByIndex(0).count);
   h.addValue(7.5);
   EXPECT_EQ(1, h.getBucketByIndex(2).count);
-  EXPECT_EQ(3.0, h.getPercentileEstimate(0.5));
+  EXPECT_NEAR(3.0, h.getPercentileEstimate(0.5), 1e-14);
 }
 
 // Test that we get counts right

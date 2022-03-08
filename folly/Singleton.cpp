@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,6 +18,8 @@
 
 #ifndef _WIN32
 #include <dlfcn.h>
+#include <signal.h>
+#include <time.h>
 #endif
 
 #include <atomic>
@@ -26,23 +28,34 @@
 #include <iostream>
 #include <string>
 
+#include <folly/Demangle.h>
 #include <folly/ScopeGuard.h>
+#include <folly/experimental/symbolizer/Symbolizer.h>
+#include <folly/portability/Config.h>
+#include <folly/portability/FmtCompile.h>
 
 #if !defined(_WIN32) && !defined(__APPLE__) && !defined(__ANDROID__)
-static void hs_init_weak(int* argc, char** argv[])
-    __attribute__((__weakref__("hs_init")));
+#define FOLLY_SINGLETON_HAVE_DLSYM 1
 #endif
 
 namespace folly {
 
+#if FOLLY_SINGLETON_HAVE_DLSYM
+namespace detail {
+static void singleton_hs_init_weak(int* argc, char** argv[])
+    __attribute__((__weakref__("hs_init")));
+} // namespace detail
+#endif
+
 SingletonVault::Type SingletonVault::defaultVaultType() {
-#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__ANDROID__)
+#if FOLLY_SINGLETON_HAVE_DLSYM
   bool isPython = dlsym(RTLD_DEFAULT, "Py_Main");
-  bool isHaskel = &::hs_init_weak || dlsym(RTLD_DEFAULT, "hs_init");
+  bool isHaskell =
+      detail::singleton_hs_init_weak || dlsym(RTLD_DEFAULT, "hs_init");
   bool isJVM = dlsym(RTLD_DEFAULT, "JNI_GetCreatedJavaVMs");
   bool isD = dlsym(RTLD_DEFAULT, "_d_run_main");
 
-  return isPython || isHaskel || isJVM || isD ? Type::Relaxed : Type::Strict;
+  return isPython || isHaskell || isJVM || isD ? Type::Relaxed : Type::Strict;
 #else
   return Type::Relaxed;
 #endif
@@ -50,6 +63,16 @@ SingletonVault::Type SingletonVault::defaultVaultType() {
 
 namespace detail {
 
+std::string TypeDescriptor::name() const {
+  auto ret = demangle(ti_.name());
+  if (tag_ti_ != std::type_index(typeid(DefaultTag))) {
+    ret += "/";
+    ret += demangle(tag_ti_.name());
+  }
+  return ret.toStdString();
+}
+
+// clang-format off
 [[noreturn]] void singletonWarnDoubleRegistrationAndAbort(
     const TypeDescriptor& type) {
   // Ensure the availability of std::cerr
@@ -60,7 +83,97 @@ namespace detail {
             << type.name() << ">\n";
   std::abort();
 }
+
+[[noreturn]] void singletonWarnLeakyDoubleRegistrationAndAbort(
+    const TypeDescriptor& type) {
+  // Ensure the availability of std::cerr
+  std::ios_base::Init ioInit;
+  std::cerr << "Double registration of singletons of the same "
+               "underlying type; check for multiple definitions "
+               "of type folly::LeakySingleton<"
+            << type.name() << ">\n";
+  std::abort();
 }
+
+[[noreturn]] void singletonWarnLeakyInstantiatingNotRegisteredAndAbort(
+    const TypeDescriptor& type) {
+  auto trace = symbolizer::getStackTraceStr();
+  LOG(FATAL) << "Creating instance for unregistered singleton: " << type.name()
+             << "\n"
+             << "Stacktrace:\n" << (!trace.empty() ? trace : "(not available)");
+  folly::assume_unreachable();
+}
+
+[[noreturn]] void singletonWarnRegisterMockEarlyAndAbort(
+    const TypeDescriptor& type) {
+  LOG(FATAL) << "Registering mock before singleton was registered: "
+             << type.name();
+  folly::assume_unreachable();
+}
+
+void singletonWarnDestroyInstanceLeak(
+    const TypeDescriptor& type,
+    const void* ptr) {
+  LOG(ERROR) << "Singleton of type " << type.name() << " has a "
+             << "living reference at destroyInstances time; beware! Raw "
+             << "pointer is " << ptr << ". It is very likely "
+             << "that some other singleton is holding a shared_ptr to it. "
+             << "This singleton will be leaked (even if a shared_ptr to it "
+             << "is eventually released)."
+             << "Make sure dependencies between these singletons are "
+             << "properly defined.";
+}
+
+[[noreturn]] void singletonWarnCreateCircularDependencyAndAbort(
+    const TypeDescriptor& type) {
+  LOG(FATAL) << "circular singleton dependency: " << type.name();
+  folly::assume_unreachable();
+}
+
+[[noreturn]] void singletonWarnCreateUnregisteredAndAbort(
+    const TypeDescriptor& type) {
+  auto trace = symbolizer::getStackTraceStr();
+  LOG(FATAL) << "Creating instance for unregistered singleton: " << type.name()
+             << "\n"
+             << "Stacktrace:\n" << (!trace.empty() ? trace : "(not available)");
+  folly::assume_unreachable();
+}
+
+[[noreturn]] void singletonWarnCreateBeforeRegistrationCompleteAndAbort(
+    const TypeDescriptor& type) {
+  auto trace = symbolizer::getStackTraceStr();
+  LOG(FATAL) << "Singleton " << type.name() << " requested before "
+             << "registrationComplete() call.\n"
+             << "This usually means that either main() never called "
+             << "folly::init, or singleton was requested before main() "
+             << "(which is not allowed).\n"
+             << "Stacktrace:\n" << (!trace.empty() ? trace : "(not available)");
+  folly::assume_unreachable();
+}
+
+void singletonPrintDestructionStackTrace(const TypeDescriptor& type) {
+  auto trace = symbolizer::getStackTraceStr();
+  LOG(ERROR) << "Singleton " << type.name() << " was released.\n"
+             << "Stacktrace:\n" << (!trace.empty() ? trace : "(not available)");
+}
+
+[[noreturn]] void singletonThrowNullCreator(const std::type_info& type) {
+  auto const msg = fmt::format(FOLLY_FMT_COMPILE(
+      "nullptr_t should be passed if you want {} to be default constructed"),
+      folly::StringPiece(demangle(type)));
+  throw std::logic_error(msg);
+}
+
+[[noreturn]] void singletonThrowGetInvokedAfterDestruction(
+    const TypeDescriptor& type) {
+  throw std::runtime_error(
+      "Raw pointer to a singleton requested after its destruction."
+      " Singleton type is: " +
+      type.name());
+}
+// clang-format on
+
+} // namespace detail
 
 namespace {
 
@@ -72,7 +185,8 @@ struct FatalHelper {
         leakedTypes += "\t" + singleton.name() + "\n";
       }
       LOG(DFATAL) << "Singletons of the following types had living references "
-                  << "after destroyInstances was finished:\n" << leakedTypes
+                  << "after destroyInstances was finished:\n"
+                  << leakedTypes
                   << "beware! It is very likely that those singleton instances "
                   << "are leaked.";
     }
@@ -85,18 +199,48 @@ struct FatalHelper {
 // OS X doesn't support constructor priorities.
 FatalHelper fatalHelper;
 #else
-FatalHelper __attribute__ ((__init_priority__ (101))) fatalHelper;
+FatalHelper __attribute__((__init_priority__(101))) fatalHelper;
 #endif
 
+} // namespace
+
+SingletonVault::SingletonVault(Type type) noexcept : type_(type) {
+  AtFork::registerHandler(
+      this,
+      /*prepare*/
+      [this]() {
+        auto singletons = singletons_.rlock();
+        auto creationOrder = creationOrder_.rlock();
+
+        CHECK_GE(singletons->size(), creationOrder->size());
+
+        for (const auto& singletonType : *creationOrder) {
+          liveSingletonsPreFork_.insert(singletons->at(singletonType));
+        }
+
+        return true;
+      },
+      /*parent*/ [this]() { liveSingletonsPreFork_.clear(); },
+      /*child*/
+      [this]() {
+        for (auto singleton : liveSingletonsPreFork_) {
+          singleton->inChildAfterFork();
+        }
+        liveSingletonsPreFork_.clear();
+      });
 }
 
-SingletonVault::~SingletonVault() { destroyInstances(); }
+SingletonVault::~SingletonVault() {
+  AtFork::unregisterHandler(this);
+  destroyInstances();
+}
 
 void SingletonVault::registerSingleton(detail::SingletonHolderBase* entry) {
   auto state = state_.rlock();
-  stateCheck(SingletonVaultState::Running, *state);
+  state->check(detail::SingletonVaultState::Type::Running);
 
-  if (UNLIKELY(state->registrationComplete)) {
+  if (UNLIKELY(state->registrationComplete) &&
+      type_.load(std::memory_order_relaxed) == Type::Strict) {
     LOG(ERROR) << "Registering singleton after registrationComplete().";
   }
 
@@ -107,9 +251,10 @@ void SingletonVault::registerSingleton(detail::SingletonHolderBase* entry) {
 
 void SingletonVault::addEagerInitSingleton(detail::SingletonHolderBase* entry) {
   auto state = state_.rlock();
-  stateCheck(SingletonVaultState::Running, *state);
+  state->check(detail::SingletonVaultState::Type::Running);
 
-  if (UNLIKELY(state->registrationComplete)) {
+  if (UNLIKELY(state->registrationComplete) &&
+      type_.load(std::memory_order_relaxed) == Type::Strict) {
     LOG(ERROR) << "Registering for eager-load after registrationComplete().";
   }
 
@@ -120,17 +265,17 @@ void SingletonVault::addEagerInitSingleton(detail::SingletonHolderBase* entry) {
 }
 
 void SingletonVault::registrationComplete() {
-  std::atexit([](){ SingletonVault::singleton()->destroyInstances(); });
+  std::atexit([]() { SingletonVault::singleton()->destroyInstances(); });
 
   auto state = state_.wlock();
-  stateCheck(SingletonVaultState::Running, *state);
+  state->check(detail::SingletonVaultState::Type::Running);
 
   if (state->registrationComplete) {
     return;
   }
 
   auto singletons = singletons_.rlock();
-  if (type_ == Type::Strict) {
+  if (type_.load(std::memory_order_relaxed) == Type::Strict) {
     for (const auto& p : *singletons) {
       if (p.second->hasLiveInstance()) {
         throw std::runtime_error(
@@ -146,7 +291,7 @@ void SingletonVault::registrationComplete() {
 void SingletonVault::doEagerInit() {
   {
     auto state = state_.rlock();
-    stateCheck(SingletonVaultState::Running, *state);
+    state->check(detail::SingletonVaultState::Type::Running);
     if (UNLIKELY(!state->registrationComplete)) {
       throw std::logic_error("registrationComplete() not yet called");
     }
@@ -161,7 +306,7 @@ void SingletonVault::doEagerInit() {
 void SingletonVault::doEagerInitVia(Executor& exe, folly::Baton<>* done) {
   {
     auto state = state_.rlock();
-    stateCheck(SingletonVaultState::Running, *state);
+    state->check(detail::SingletonVaultState::Type::Running);
     if (UNLIKELY(!state->registrationComplete)) {
       throw std::logic_error("registrationComplete() not yet called");
     }
@@ -197,10 +342,10 @@ void SingletonVault::doEagerInitVia(Executor& exe, folly::Baton<>* done) {
 
 void SingletonVault::destroyInstances() {
   auto stateW = state_.wlock();
-  if (stateW->state == SingletonVaultState::Quiescing) {
+  if (stateW->state == detail::SingletonVaultState::Type::Quiescing) {
     return;
   }
-  stateW->state = SingletonVaultState::Quiescing;
+  stateW->state = detail::SingletonVaultState::Type::Quiescing;
 
   auto stateR = stateW.moveFromWriteToRead();
   {
@@ -224,12 +369,12 @@ void SingletonVault::destroyInstances() {
     }
 
     for (auto& singleton_type : *creationOrder) {
-      auto singleton = singletons->at(singleton_type);
-      if (!singleton->hasLiveInstance()) {
+      auto instance = singletons->at(singleton_type);
+      if (!instance->hasLiveInstance()) {
         continue;
       }
 
-      fatalHelper.leakedSingletons_.push_back(singleton->type());
+      fatalHelper.leakedSingletons_.push_back(instance->type());
     }
   }
 
@@ -242,28 +387,74 @@ void SingletonVault::destroyInstances() {
 void SingletonVault::reenableInstances() {
   auto state = state_.wlock();
 
-  stateCheck(SingletonVaultState::Quiescing, *state);
+  state->check(detail::SingletonVaultState::Type::Quiescing);
 
-  state->state = SingletonVaultState::Running;
+  state->state = detail::SingletonVaultState::Type::Running;
 }
 
 void SingletonVault::scheduleDestroyInstances() {
   // Add a dependency on folly::ThreadLocal to make sure all its static
   // singletons are initalized first.
   threadlocal_detail::StaticMeta<void, void>::instance();
-
-  class SingletonVaultDestructor {
-   public:
-    ~SingletonVaultDestructor() {
-      SingletonVault::singleton()->destroyInstances();
-    }
-  };
-
-  // Here we intialize a singleton, which calls destroyInstances in its
-  // destructor. Because of singleton destruction order - it will be destroyed
-  // before all the singletons, which were initialized before it and after all
-  // the singletons initialized after it.
-  static SingletonVaultDestructor singletonVaultDestructor;
+  std::atexit([] {
+    SingletonVault::singleton()->startShutdownTimer();
+    SingletonVault::singleton()->destroyInstances();
+  });
 }
 
+void SingletonVault::addToShutdownLog(std::string message) {
+  shutdownLog_.wlock()->push_back(std::move(message));
 }
+
+#if FOLLY_HAVE_LIBRT
+namespace {
+[[noreturn]] void fireShutdownSignalHelper(sigval_t sigval) {
+  static_cast<SingletonVault*>(sigval.sival_ptr)->fireShutdownTimer();
+}
+} // namespace
+#endif
+
+void SingletonVault::startShutdownTimer() {
+#if FOLLY_HAVE_LIBRT
+  if (shutdownTimerStarted_.exchange(true)) {
+    return;
+  }
+
+  if (!shutdownTimeout_.count()) {
+    return;
+  }
+
+  struct sigevent sig;
+  sig.sigev_notify = SIGEV_THREAD;
+  sig.sigev_notify_function = fireShutdownSignalHelper;
+  sig.sigev_value.sival_ptr = this;
+  sig.sigev_notify_attributes = nullptr;
+  timer_t timerId;
+  PCHECK(timer_create(CLOCK_MONOTONIC, &sig, &timerId) == 0);
+
+  struct itimerspec newValue, oldValue;
+  newValue.it_value.tv_sec =
+      std::chrono::milliseconds(shutdownTimeout_).count() / 1000;
+  newValue.it_value.tv_nsec =
+      std::chrono::milliseconds(shutdownTimeout_).count() % 1000 * 1000000;
+  newValue.it_interval.tv_sec = 0;
+  newValue.it_interval.tv_nsec = 0;
+  PCHECK(timer_settime(timerId, 0, &newValue, &oldValue) == 0);
+#endif
+}
+
+[[noreturn]] void SingletonVault::fireShutdownTimer() {
+  std::string shutdownLog;
+  for (auto& logMessage : shutdownLog_.copy()) {
+    shutdownLog += logMessage + "\n";
+  }
+
+  auto msg = folly::to<std::string>(
+      "Failed to complete shutdown within ",
+      std::chrono::milliseconds(shutdownTimeout_).count(),
+      "ms. Shutdown log:\n",
+      shutdownLog);
+  folly::terminate_with<std::runtime_error>(msg);
+}
+
+} // namespace folly

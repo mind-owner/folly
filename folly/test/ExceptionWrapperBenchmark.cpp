@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/ExceptionWrapper.h>
 
 #include <atomic>
@@ -24,8 +25,11 @@
 #include <folly/Benchmark.h>
 #include <folly/portability/GFlags.h>
 
-DEFINE_int32(num_threads, 32, "Number of threads to run concurrency "
-                              "benchmarks");
+DEFINE_int32(
+    num_threads,
+    32,
+    "Number of threads to run concurrency "
+    "benchmarks");
 
 /*
  * Use case 1: Library wraps errors in either exception_wrapper or
@@ -50,7 +54,7 @@ BENCHMARK_RELATIVE(exception_wrapper_create_and_test, iters) {
   }
 }
 
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
 
 BENCHMARK(exception_ptr_create_and_test_concurrent, iters) {
   std::atomic<bool> go(false);
@@ -58,7 +62,8 @@ BENCHMARK(exception_ptr_create_and_test_concurrent, iters) {
   BENCHMARK_SUSPEND {
     for (int t = 0; t < FLAGS_num_threads; ++t) {
       threads.emplace_back([&go, iters] {
-        while (!go) { }
+        while (!go) {
+        }
         std::runtime_error e("payload");
         for (size_t i = 0; i < iters; ++i) {
           auto ep = std::make_exception_ptr(e);
@@ -80,7 +85,8 @@ BENCHMARK_RELATIVE(exception_wrapper_create_and_test_concurrent, iters) {
   BENCHMARK_SUSPEND {
     for (int t = 0; t < FLAGS_num_threads; ++t) {
       threads.emplace_back([&go, iters] {
-        while (!go) { }
+        while (!go) {
+        }
         std::runtime_error e("payload");
         for (size_t i = 0; i < iters; ++i) {
           auto ew = folly::make_exception_wrapper<std::runtime_error>(e);
@@ -96,7 +102,7 @@ BENCHMARK_RELATIVE(exception_wrapper_create_and_test_concurrent, iters) {
   }
 }
 
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
 
 /*
  * Use case 2: Library wraps errors in either exception_wrapper or
@@ -134,8 +140,7 @@ BENCHMARK_RELATIVE(exception_wrapper_create_and_cast, iters) {
   }
 }
 
-
-BENCHMARK_DRAW_LINE()
+BENCHMARK_DRAW_LINE();
 
 BENCHMARK(exception_ptr_create_and_throw_concurrent, iters) {
   std::atomic<bool> go(false);
@@ -143,7 +148,8 @@ BENCHMARK(exception_ptr_create_and_throw_concurrent, iters) {
   BENCHMARK_SUSPEND {
     for (int t = 0; t < FLAGS_num_threads; ++t) {
       threads.emplace_back([&go, iters] {
-        while (!go) { }
+        while (!go) {
+        }
         std::runtime_error e("payload");
         for (size_t i = 0; i < iters; ++i) {
           auto ep = std::make_exception_ptr(e);
@@ -167,7 +173,8 @@ BENCHMARK_RELATIVE(exception_wrapper_create_and_throw_concurrent, iters) {
   BENCHMARK_SUSPEND {
     for (int t = 0; t < FLAGS_num_threads; ++t) {
       threads.emplace_back([&go, iters] {
-        while (!go) { }
+        while (!go) {
+        }
         std::runtime_error e("payload");
         for (size_t i = 0; i < iters; ++i) {
           auto ew = folly::make_exception_wrapper<std::runtime_error>(e);
@@ -191,7 +198,8 @@ BENCHMARK_RELATIVE(exception_wrapper_create_and_cast_concurrent, iters) {
   BENCHMARK_SUSPEND {
     for (int t = 0; t < FLAGS_num_threads; ++t) {
       threads.emplace_back([&go, iters] {
-        while (!go) { }
+        while (!go) {
+        }
         std::runtime_error e("payload");
         for (size_t i = 0; i < iters; ++i) {
           auto ew = folly::make_exception_wrapper<std::runtime_error>(e);
@@ -207,7 +215,7 @@ BENCHMARK_RELATIVE(exception_wrapper_create_and_cast_concurrent, iters) {
   }
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
   folly::runBenchmarks();
   return 0;

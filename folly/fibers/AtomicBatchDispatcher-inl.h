@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 namespace folly {
 namespace fibers {
 
@@ -21,13 +22,9 @@ struct AtomicBatchDispatcher<InputT, ResultT>::DispatchBaton {
   DispatchBaton(DispatchFunctionT&& dispatchFunction)
       : expectedCount_(0), dispatchFunction_(std::move(dispatchFunction)) {}
 
-  ~DispatchBaton() {
-    fulfillPromises();
-  }
+  ~DispatchBaton() { fulfillPromises(); }
 
-  void reserve(size_t numEntries) {
-    optEntries_.reserve(numEntries);
-  }
+  void reserve(size_t numEntries) { optEntries_.reserve(numEntries); }
 
   void setExceptionWrapper(folly::exception_wrapper&& exWrapper) {
     exceptionWrapper_ = std::move(exWrapper);
@@ -65,8 +62,7 @@ struct AtomicBatchDispatcher<InputT, ResultT>::DispatchBaton {
 
   template <typename TException>
   void setExceptionResults(
-      const TException& ex,
-      std::exception_ptr eptr = std::exception_ptr()) {
+      const TException& ex, std::exception_ptr eptr = std::exception_ptr()) {
     auto exceptionWrapper =
         eptr ? exception_wrapper(eptr, ex) : exception_wrapper(ex);
     return setExceptionResults(exceptionWrapper);
@@ -136,7 +132,7 @@ struct AtomicBatchDispatcher<InputT, ResultT>::DispatchBaton {
       return *this;
     }
 
-    explicit Entry(InputT&& input) : input(std::move(input)) {}
+    explicit Entry(InputT&& input_) : input(std::move(input_)) {}
   };
 
   size_t expectedCount_;
@@ -147,8 +143,7 @@ struct AtomicBatchDispatcher<InputT, ResultT>::DispatchBaton {
 
 template <typename InputT, typename ResultT>
 AtomicBatchDispatcher<InputT, ResultT>::Token::Token(
-    std::shared_ptr<DispatchBaton> baton,
-    size_t sequenceNumber)
+    std::shared_ptr<DispatchBaton> baton, size_t sequenceNumber)
     : baton_(std::move(baton)), sequenceNumber_(sequenceNumber) {}
 
 template <typename InputT, typename ResultT>
@@ -222,4 +217,4 @@ AtomicBatchDispatcher<InputT, ResultT> createAtomicBatchDispatcher(
 }
 
 } // namespace fibers
-} // manespace folly
+} // namespace folly

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,56 +18,74 @@
 
 #include <folly/portability/GTest.h>
 
-namespace {
+using folly::constexpr_strcmp;
+using folly::constexpr_strlen;
+using folly::detail::constexpr_strcmp_fallback;
+using folly::detail::constexpr_strlen_fallback;
 
-class ConstexprTest : public testing::Test {};
+template <typename, typename>
+struct static_assert_same;
+template <typename T>
+struct static_assert_same<T, T> {};
+
+TEST(ConstexprTest, constexpr_strlen_cstr) {
+  constexpr auto v = "hello";
+  {
+    constexpr auto a = constexpr_strlen(v);
+    void(static_assert_same<const size_t, decltype(a)>{});
+    EXPECT_EQ(5, a);
+  }
+  {
+    constexpr auto a = constexpr_strlen_fallback(v);
+    void(static_assert_same<const size_t, decltype(a)>{});
+    EXPECT_EQ(5, a);
+  }
 }
 
-TEST_F(ConstexprTest, constexpr_abs_unsigned) {
-  constexpr auto v = uint32_t(17);
-  constexpr auto a = folly::constexpr_abs(v);
-  EXPECT_EQ(17, a);
-  EXPECT_TRUE((std::is_same<const uint32_t, decltype(a)>::value));
+TEST(ConstexprTest, constexpr_strlen_ints) {
+  constexpr int v[] = {5, 3, 4, 0, 7};
+  {
+    constexpr auto a = constexpr_strlen(v);
+    void(static_assert_same<const size_t, decltype(a)>{});
+    EXPECT_EQ(3, a);
+  }
+  {
+    constexpr auto a = constexpr_strlen_fallback(v);
+    void(static_assert_same<const size_t, decltype(a)>{});
+    EXPECT_EQ(3, a);
+  }
 }
 
-TEST_F(ConstexprTest, constexpr_abs_signed_positive) {
-  constexpr auto v = int32_t(17);
-  constexpr auto a = folly::constexpr_abs(v);
-  EXPECT_EQ(17, a);
-  EXPECT_TRUE((std::is_same<const uint32_t, decltype(a)>::value));
+TEST(ConstexprTest, constexpr_strcmp_ints) {
+  constexpr int v[] = {5, 3, 4, 0, 7};
+  constexpr int v1[] = {6, 4};
+  static_assert(constexpr_strcmp(v1, v) > 0, "constexpr_strcmp is broken");
+  static_assert(constexpr_strcmp(v, v1) < 0, "constexpr_strcmp is broken");
+  static_assert(constexpr_strcmp(v, v) == 0, "constexpr_strcmp is broken");
+  static_assert(
+      constexpr_strcmp_fallback(v1, v) > 0, "constexpr_strcmp is broken");
+  static_assert(
+      constexpr_strcmp_fallback(v, v1) < 0, "constexpr_strcmp is broken");
+  static_assert(
+      constexpr_strcmp_fallback(v, v) == 0, "constexpr_strcmp is broken");
 }
 
-TEST_F(ConstexprTest, constexpr_abs_signed_negative) {
-  constexpr auto v = int32_t(-17);
-  constexpr auto a = folly::constexpr_abs(v);
-  EXPECT_EQ(17, a);
-  EXPECT_TRUE((std::is_same<const uint32_t, decltype(a)>::value));
-}
-
-TEST_F(ConstexprTest, constexpr_abs_float_positive) {
-  constexpr auto v = 17.5f;
-  constexpr auto a = folly::constexpr_abs(v);
-  EXPECT_EQ(17.5, a);
-  EXPECT_TRUE((std::is_same<const float, decltype(a)>::value));
-}
-
-TEST_F(ConstexprTest, constexpr_abs_float_negative) {
-  constexpr auto v = -17.5f;
-  constexpr auto a = folly::constexpr_abs(v);
-  EXPECT_EQ(17.5, a);
-  EXPECT_TRUE((std::is_same<const float, decltype(a)>::value));
-}
-
-TEST_F(ConstexprTest, constexpr_abs_double_positive) {
-  constexpr auto v = 17.5;
-  constexpr auto a = folly::constexpr_abs(v);
-  EXPECT_EQ(17.5, a);
-  EXPECT_TRUE((std::is_same<const double, decltype(a)>::value));
-}
-
-TEST_F(ConstexprTest, constexpr_abs_double_negative) {
-  constexpr auto v = -17.5;
-  constexpr auto a = folly::constexpr_abs(v);
-  EXPECT_EQ(17.5, a);
-  EXPECT_TRUE((std::is_same<const double, decltype(a)>::value));
-}
+static_assert(
+    constexpr_strcmp("abc", "abc") == 0, "constexpr_strcmp is broken");
+static_assert(constexpr_strcmp("", "") == 0, "constexpr_strcmp is broken");
+static_assert(constexpr_strcmp("abc", "def") < 0, "constexpr_strcmp is broken");
+static_assert(constexpr_strcmp("xyz", "abc") > 0, "constexpr_strcmp is broken");
+static_assert(constexpr_strcmp("a", "abc") < 0, "constexpr_strcmp is broken");
+static_assert(constexpr_strcmp("abc", "a") > 0, "constexpr_strcmp is broken");
+static_assert(
+    constexpr_strcmp_fallback("abc", "abc") == 0, "constexpr_strcmp is broken");
+static_assert(
+    constexpr_strcmp_fallback("", "") == 0, "constexpr_strcmp is broken");
+static_assert(
+    constexpr_strcmp_fallback("abc", "def") < 0, "constexpr_strcmp is broken");
+static_assert(
+    constexpr_strcmp_fallback("xyz", "abc") > 0, "constexpr_strcmp is broken");
+static_assert(
+    constexpr_strcmp_fallback("a", "abc") < 0, "constexpr_strcmp is broken");
+static_assert(
+    constexpr_strcmp_fallback("abc", "a") > 0, "constexpr_strcmp is broken");

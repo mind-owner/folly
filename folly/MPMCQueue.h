@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -18,10 +18,9 @@
 
 #include <algorithm>
 #include <atomic>
-#include <assert.h>
-#include <boost/noncopyable.hpp>
+#include <cassert>
+#include <cstring>
 #include <limits>
-#include <string.h>
 #include <type_traits>
 
 #include <folly/Traits.h>
@@ -33,13 +32,15 @@ namespace folly {
 
 namespace detail {
 
-template<typename T, template<typename> class Atom>
+template <typename T, template <typename> class Atom>
 struct SingleElementQueue;
 
-template <typename T> class MPMCPipelineStageImpl;
+template <typename T>
+class MPMCPipelineStageImpl;
 
 /// MPMCQueue base CRTP template
-template <typename> class MPMCQueueBase;
+template <typename>
+class MPMCQueueBase;
 
 } // namespace detail
 
@@ -96,22 +97,26 @@ template <typename> class MPMCQueueBase;
 /// are you can enqueue one sentinel and then have each consumer requeue
 /// two sentinels after it receives it (by requeuing 2 the shutdown can
 /// complete in O(log P) time instead of O(P)).
-template<typename T, template<typename> class Atom = std::atomic,
-         bool Dynamic = false>
-class MPMCQueue : public detail::MPMCQueueBase<MPMCQueue<T,Atom,Dynamic>> {
+template <
+    typename T,
+    template <typename> class Atom = std::atomic,
+    bool Dynamic = false>
+class MPMCQueue : public detail::MPMCQueueBase<MPMCQueue<T, Atom, Dynamic>> {
   friend class detail::MPMCPipelineStageImpl<T>;
-  using Slot = detail::SingleElementQueue<T,Atom>;
- public:
+  using Slot = detail::SingleElementQueue<T, Atom>;
 
+ public:
   explicit MPMCQueue(size_t queueCapacity)
-    : detail::MPMCQueueBase<MPMCQueue<T,Atom,Dynamic>>(queueCapacity)
-  {
+      : detail::MPMCQueueBase<MPMCQueue<T, Atom, Dynamic>>(queueCapacity) {
     this->stride_ = this->computeStride(queueCapacity);
     this->slots_ = new Slot[queueCapacity + 2 * this->kSlotPadding];
   }
 
-  MPMCQueue() noexcept { }
+  MPMCQueue() noexcept {}
 };
+
+/// *** The dynamic version of MPMCQueue is deprecated. ***
+/// Use UnboundedQueue instead.
 
 /// The dynamic version of MPMCQueue allows dynamic expansion of queue
 /// capacity, such that a queue may start with a smaller capacity than
@@ -141,7 +146,7 @@ class MPMCQueue : public detail::MPMCQueueBase<MPMCQueue<T,Atom,Dynamic>> {
 /// closed arrays instead of the current one. Information about closed
 /// slots arrays (array address, capacity, stride, and offset) is
 /// maintained in a logarithmic-sized structure. Each entry in that
-/// structure never need to be changed once set. The number of closed
+/// structure never needs to be changed once set. The number of closed
 /// arrays is half the value of the seqlock (when unlocked).
 ///
 /// The acquisition of the seqlock to perform an expansion does not
@@ -168,33 +173,29 @@ class MPMCQueue : public detail::MPMCQueueBase<MPMCQueue<T,Atom,Dynamic>> {
 ///
 /// The dynamic version is a partial specialization of MPMCQueue with
 /// Dynamic == true
-template <typename T, template<typename> class Atom>
-class MPMCQueue<T,Atom,true> :
-      public detail::MPMCQueueBase<MPMCQueue<T,Atom,true>> {
-  friend class detail::MPMCQueueBase<MPMCQueue<T,Atom,true>>;
-  using Slot = detail::SingleElementQueue<T,Atom>;
+template <typename T, template <typename> class Atom>
+class MPMCQueue<T, Atom, true>
+    : public detail::MPMCQueueBase<MPMCQueue<T, Atom, true>> {
+  friend class detail::MPMCQueueBase<MPMCQueue<T, Atom, true>>;
+  using Slot = detail::SingleElementQueue<T, Atom>;
 
   struct ClosedArray {
-    uint64_t offset_ {0};
-    Slot* slots_ {nullptr};
-    size_t capacity_ {0};
-    int stride_ {0};
+    uint64_t offset_{0};
+    Slot* slots_{nullptr};
+    size_t capacity_{0};
+    int stride_{0};
   };
 
  public:
-
   explicit MPMCQueue(size_t queueCapacity)
-    : detail::MPMCQueueBase<MPMCQueue<T,Atom,true>>(queueCapacity)
-  {
+      : detail::MPMCQueueBase<MPMCQueue<T, Atom, true>>(queueCapacity) {
     size_t cap = std::min<size_t>(kDefaultMinDynamicCapacity, queueCapacity);
     initQueue(cap, kDefaultExpansionMultiplier);
   }
 
-  explicit MPMCQueue(size_t queueCapacity,
-                     size_t minCapacity,
-                     size_t expansionMultiplier)
-    : detail::MPMCQueueBase<MPMCQueue<T,Atom,true>>(queueCapacity)
-  {
+  explicit MPMCQueue(
+      size_t queueCapacity, size_t minCapacity, size_t expansionMultiplier)
+      : detail::MPMCQueueBase<MPMCQueue<T, Atom, true>>(queueCapacity) {
     minCapacity = std::max<size_t>(1, minCapacity);
     size_t cap = std::min<size_t>(minCapacity, queueCapacity);
     expansionMultiplier = std::max<size_t>(2, expansionMultiplier);
@@ -206,30 +207,35 @@ class MPMCQueue<T,Atom,true> :
     closed_ = nullptr;
   }
 
-  MPMCQueue(MPMCQueue<T,Atom,true>&& rhs) noexcept {
+  MPMCQueue(MPMCQueue<T, Atom, true>&& rhs) noexcept {
     this->capacity_ = rhs.capacity_;
-    this->slots_ = rhs.slots_;
-    this->stride_ = rhs.stride_;
-    this->dstate_.store(rhs.dstate_.load(std::memory_order_relaxed),
-                        std::memory_order_relaxed);
-    this->dcapacity_.store(rhs.dcapacity_.load(std::memory_order_relaxed),
-                           std::memory_order_relaxed);
-    this->pushTicket_.store(rhs.pushTicket_.load(std::memory_order_relaxed),
-                            std::memory_order_relaxed);
-    this->popTicket_.store(rhs.popTicket_.load(std::memory_order_relaxed),
-                           std::memory_order_relaxed);
+    new (&this->dslots_)
+        Atom<Slot*>(rhs.dslots_.load(std::memory_order_relaxed));
+    new (&this->dstride_)
+        Atom<int>(rhs.dstride_.load(std::memory_order_relaxed));
+    this->dstate_.store(
+        rhs.dstate_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    this->dcapacity_.store(
+        rhs.dcapacity_.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    this->pushTicket_.store(
+        rhs.pushTicket_.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    this->popTicket_.store(
+        rhs.popTicket_.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
     this->pushSpinCutoff_.store(
-      rhs.pushSpinCutoff_.load(std::memory_order_relaxed),
-      std::memory_order_relaxed);
+        rhs.pushSpinCutoff_.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
     this->popSpinCutoff_.store(
-      rhs.popSpinCutoff_.load(std::memory_order_relaxed),
-      std::memory_order_relaxed);
+        rhs.popSpinCutoff_.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
     dmult_ = rhs.dmult_;
     closed_ = rhs.closed_;
 
     rhs.capacity_ = 0;
-    rhs.slots_ = nullptr;
-    rhs.stride_ = 0;
+    rhs.dslots_.store(nullptr, std::memory_order_relaxed);
+    rhs.dstride_.store(0, std::memory_order_relaxed);
     rhs.dstate_.store(0, std::memory_order_relaxed);
     rhs.dcapacity_.store(0, std::memory_order_relaxed);
     rhs.pushTicket_.store(0, std::memory_order_relaxed);
@@ -240,7 +246,7 @@ class MPMCQueue<T,Atom,true> :
     rhs.closed_ = nullptr;
   }
 
-  MPMCQueue<T,Atom, true> const& operator= (MPMCQueue<T,Atom, true>&& rhs) {
+  MPMCQueue<T, Atom, true> const& operator=(MPMCQueue<T, Atom, true>&& rhs) {
     if (this != &rhs) {
       this->~MPMCQueue();
       new (this) MPMCQueue(std::move(rhs));
@@ -255,13 +261,20 @@ class MPMCQueue<T,Atom,true> :
       }
       delete[] closed_;
     }
+    using AtomInt = Atom<int>;
+    this->dstride_.~AtomInt();
+    using AtomSlot = Atom<Slot*>;
+    // Sort of a hack to get ~MPMCQueueBase to free dslots_
+    auto slots = this->dslots_.load();
+    this->dslots_.~AtomSlot();
+    this->slots_ = slots;
   }
 
   size_t allocatedCapacity() const noexcept {
     return this->dcapacity_.load(std::memory_order_relaxed);
   }
 
-  template <typename ...Args>
+  template <typename... Args>
   void blockingWrite(Args&&... args) noexcept {
     uint64_t ticket = this->pushTicket_++;
     Slot* slots;
@@ -278,12 +291,12 @@ class MPMCQueue<T,Atom,true> :
         // There was an expansion after this ticket was issued.
         break;
       }
-      if (slots[this->idx((ticket-offset), cap, stride)]
-          .mayEnqueue(this->turn(ticket-offset, cap))) {
+      if (slots[this->idx((ticket - offset), cap, stride)].mayEnqueue(
+              this->turn(ticket - offset, cap))) {
         // A slot is ready. No need to expand.
         break;
-      } else if (this->popTicket_.load(std::memory_order_relaxed) + cap
-                 > ticket) {
+      } else if (
+          this->popTicket_.load(std::memory_order_relaxed) + cap > ticket) {
         // May block, but a pop is in progress. No need to expand.
         // Get seqlock read section info again in case an expansion
         // occurred with an equal or higher ticket.
@@ -299,8 +312,8 @@ class MPMCQueue<T,Atom,true> :
         }
       }
     } while (true);
-    this->enqueueWithTicketBase(ticket-offset, slots, cap, stride,
-                                std::forward<Args>(args)...);
+    this->enqueueWithTicketBase(
+        ticket - offset, slots, cap, stride, std::forward<Args>(args)...);
   }
 
   void blockingReadWithTicket(uint64_t& ticket, T& elem) noexcept {
@@ -316,11 +329,10 @@ class MPMCQueue<T,Atom,true> :
     // If there was an expansion after the corresponding push ticket
     // was issued, adjust accordingly
     maybeUpdateFromClosed(state, ticket, offset, slots, cap, stride);
-    this->dequeueWithTicketBase(ticket-offset, slots, cap, stride, elem);
+    this->dequeueWithTicketBase(ticket - offset, slots, cap, stride, elem);
   }
 
  private:
-
   enum {
     kSeqlockBits = 6,
     kDefaultMinDynamicCapacity = 10,
@@ -333,23 +345,21 @@ class MPMCQueue<T,Atom,true> :
   ClosedArray* closed_;
 
   void initQueue(const size_t cap, const size_t mult) {
-    this->stride_ = this->computeStride(cap);
-    this->slots_ = new Slot[cap + 2 * this->kSlotPadding];
+    new (&this->dstride_) Atom<int>(this->computeStride(cap));
+    Slot* slots = new Slot[cap + 2 * this->kSlotPadding];
+    new (&this->dslots_) Atom<Slot*>(slots);
     this->dstate_.store(0);
     this->dcapacity_.store(cap);
     dmult_ = mult;
     size_t maxClosed = 0;
-    for (size_t expanded = cap;
-         expanded < this->capacity_;
-         expanded *= mult) {
+    for (size_t expanded = cap; expanded < this->capacity_; expanded *= mult) {
       ++maxClosed;
     }
     closed_ = (maxClosed > 0) ? new ClosedArray[maxClosed] : nullptr;
   }
 
   bool tryObtainReadyPushTicket(
-      uint64_t& ticket, Slot*& slots, size_t& cap, int& stride
-  ) noexcept {
+      uint64_t& ticket, Slot*& slots, size_t& cap, int& stride) noexcept {
     uint64_t state;
     do {
       ticket = this->pushTicket_.load(std::memory_order_acquire); // A
@@ -363,8 +373,8 @@ class MPMCQueue<T,Atom,true> :
       uint64_t offset;
       maybeUpdateFromClosed(state, ticket, offset, slots, cap, stride);
 
-      if (slots[this->idx((ticket-offset), cap, stride)]
-          .mayEnqueue(this->turn(ticket-offset, cap))) {
+      if (slots[this->idx((ticket - offset), cap, stride)].mayEnqueue(
+              this->turn(ticket - offset, cap))) {
         // A slot is ready.
         if (this->pushTicket_.compare_exchange_strong(ticket, ticket + 1)) {
           // Adjust ticket
@@ -392,8 +402,7 @@ class MPMCQueue<T,Atom,true> :
   }
 
   bool tryObtainPromisedPushTicket(
-    uint64_t& ticket, Slot*& slots, size_t& cap, int& stride
-  ) noexcept {
+      uint64_t& ticket, Slot*& slots, size_t& cap, int& stride) noexcept {
     uint64_t state;
     do {
       ticket = this->pushTicket_.load(std::memory_order_acquire);
@@ -430,8 +439,7 @@ class MPMCQueue<T,Atom,true> :
   }
 
   bool tryObtainReadyPopTicket(
-    uint64_t& ticket, Slot*& slots, size_t& cap, int& stride
-  ) noexcept {
+      uint64_t& ticket, Slot*& slots, size_t& cap, int& stride) noexcept {
     uint64_t state;
     do {
       ticket = this->popTicket_.load(std::memory_order_relaxed);
@@ -445,8 +453,8 @@ class MPMCQueue<T,Atom,true> :
       uint64_t offset;
       maybeUpdateFromClosed(state, ticket, offset, slots, cap, stride);
 
-      if (slots[this->idx((ticket-offset), cap, stride)]
-          .mayDequeue(this->turn(ticket-offset, cap))) {
+      if (slots[this->idx((ticket - offset), cap, stride)].mayDequeue(
+              this->turn(ticket - offset, cap))) {
         if (this->popTicket_.compare_exchange_strong(ticket, ticket + 1)) {
           // Adjust ticket
           ticket -= offset;
@@ -459,8 +467,7 @@ class MPMCQueue<T,Atom,true> :
   }
 
   bool tryObtainPromisedPopTicket(
-    uint64_t& ticket, Slot*& slots, size_t& cap, int& stride
-  ) noexcept {
+      uint64_t& ticket, Slot*& slots, size_t& cap, int& stride) noexcept {
     uint64_t state;
     do {
       ticket = this->popTicket_.load(std::memory_order_acquire);
@@ -487,7 +494,7 @@ class MPMCQueue<T,Atom,true> :
   }
 
   /// Enqueues an element with a specific ticket number
-  template <typename ...Args>
+  template <typename... Args>
   void enqueueWithTicket(const uint64_t ticket, Args&&... args) noexcept {
     Slot* slots;
     size_t cap;
@@ -495,14 +502,15 @@ class MPMCQueue<T,Atom,true> :
     uint64_t state;
     uint64_t offset;
 
-    while (!trySeqlockReadSection(state, slots, cap, stride)) {}
+    while (!trySeqlockReadSection(state, slots, cap, stride)) {
+    }
 
     // If there was an expansion after this ticket was issued, adjust
     // accordingly
     maybeUpdateFromClosed(state, ticket, offset, slots, cap, stride);
 
-    this->enqueueWithTicketBase(ticket-offset, slots, cap, stride,
-                                std::forward<Args>(args)...);
+    this->enqueueWithTicketBase(
+        ticket - offset, slots, cap, stride, std::forward<Args>(args)...);
   }
 
   uint64_t getOffset(const uint64_t state) const noexcept {
@@ -514,7 +522,7 @@ class MPMCQueue<T,Atom,true> :
   }
 
   /// Try to expand the queue. Returns true if this expansion was
-  /// successful or a concurent expansion is in progress. Returns
+  /// successful or a concurrent expansion is in progress. Returns
   /// false if the queue has reached its maximum capacity or
   /// allocation has failed.
   bool tryExpand(const uint64_t state, const size_t cap) noexcept {
@@ -526,12 +534,11 @@ class MPMCQueue<T,Atom,true> :
     assert((state & 1) == 0);
     if (this->dstate_.compare_exchange_strong(oldval, state + 1)) {
       assert(cap == this->dcapacity_.load());
-      uint64_t ticket = 1 + std::max(this->pushTicket_.load(),
-                                     this->popTicket_.load());
-      size_t newCapacity =
-        std::min(dmult_ * cap, this->capacity_);
+      uint64_t ticket =
+          1 + std::max(this->pushTicket_.load(), this->popTicket_.load());
+      size_t newCapacity = std::min(dmult_ * cap, this->capacity_);
       Slot* newSlots =
-        new (std::nothrow) Slot[newCapacity + 2 * this->kSlotPadding];
+          new (std::nothrow) Slot[newCapacity + 2 * this->kSlotPadding];
       if (newSlots == nullptr) {
         // Expansion failed. Restore the seqlock
         this->dstate_.store(state);
@@ -556,7 +563,7 @@ class MPMCQueue<T,Atom,true> :
       this->dstate_.store((ticket << kSeqlockBits) + (2 * (index + 1)));
       return true;
     } else { // failed to acquire seqlock
-      // Someone acaquired the seqlock. Go back to the caller and get
+      // Someone acquired the seqlock. Go back to the caller and get
       // up-to-date info.
       return true;
     }
@@ -564,8 +571,7 @@ class MPMCQueue<T,Atom,true> :
 
   /// Seqlock read-only section
   bool trySeqlockReadSection(
-    uint64_t& state, Slot*& slots, size_t& cap, int& stride
-  ) noexcept {
+      uint64_t& state, Slot*& slots, size_t& cap, int& stride) noexcept {
     state = this->dstate_.load(std::memory_order_acquire);
     if (state & 1) {
       // Locked.
@@ -612,76 +618,79 @@ class MPMCQueue<T,Atom,true> :
 namespace detail {
 
 /// CRTP specialization of MPMCQueueBase
-template<
-  template<
-    typename T, template<typename> class Atom, bool Dynamic> class Derived,
-  typename T, template<typename> class Atom, bool Dynamic>
-class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
+template <
+    template <typename T, template <typename> class Atom, bool Dynamic>
+    class Derived,
+    typename T,
+    template <typename>
+    class Atom,
+    bool Dynamic>
+class MPMCQueueBase<Derived<T, Atom, Dynamic>> {
+  // Note: Using CRTP static casts in several functions of this base
+  // template instead of making called functions virtual or duplicating
+  // the code of calling functions in the derived partially specialized
+  // template
 
-// Note: Using CRTP static casts in several functions of this base
-// template instead of making called functions virtual or duplicating
-// the code of calling functions in the derived partially specialized
-// template
-
-  static_assert(std::is_nothrow_constructible<T,T&&>::value ||
-                folly::IsRelocatable<T>::value,
+  static_assert(
+      std::is_nothrow_constructible<T, T&&>::value ||
+          folly::IsRelocatable<T>::value,
       "T must be relocatable or have a noexcept move constructor");
 
  public:
   typedef T value_type;
 
-  using Slot = detail::SingleElementQueue<T,Atom>;
+  using Slot = detail::SingleElementQueue<T, Atom>;
 
   explicit MPMCQueueBase(size_t queueCapacity)
-    : capacity_(queueCapacity)
-    , pushTicket_(0)
-    , popTicket_(0)
-    , pushSpinCutoff_(0)
-    , popSpinCutoff_(0)
-  {
+      : capacity_(queueCapacity),
+        dstate_(0),
+        dcapacity_(0),
+        pushTicket_(0),
+        popTicket_(0),
+        pushSpinCutoff_(0),
+        popSpinCutoff_(0) {
     if (queueCapacity == 0) {
       throw std::invalid_argument(
-        "MPMCQueue with explicit capacity 0 is impossible"
-        // Stride computation in derived classes would sigfpe if capacity is 0
+          "MPMCQueue with explicit capacity 0 is impossible"
+          // Stride computation in derived classes would sigfpe if capacity is 0
       );
     }
 
     // ideally this would be a static assert, but g++ doesn't allow it
-    assert(alignof(MPMCQueue<T, Atom>) >= CacheLocality::kFalseSharingRange);
+    assert(
+        alignof(MPMCQueue<T, Atom>) >= hardware_destructive_interference_size);
     assert(
         static_cast<uint8_t*>(static_cast<void*>(&popTicket_)) -
             static_cast<uint8_t*>(static_cast<void*>(&pushTicket_)) >=
-        CacheLocality::kFalseSharingRange);
+        static_cast<ptrdiff_t>(hardware_destructive_interference_size));
   }
 
   /// A default-constructed queue is useful because a usable (non-zero
   /// capacity) queue can be moved onto it or swapped with it
   MPMCQueueBase() noexcept
-    : capacity_(0)
-    , slots_(nullptr)
-    , stride_(0)
-    , dstate_(0)
-    , dcapacity_(0)
-    , pushTicket_(0)
-    , popTicket_(0)
-    , pushSpinCutoff_(0)
-    , popSpinCutoff_(0)
-  {}
+      : capacity_(0),
+        slots_(nullptr),
+        stride_(0),
+        dstate_(0),
+        dcapacity_(0),
+        pushTicket_(0),
+        popTicket_(0),
+        pushSpinCutoff_(0),
+        popSpinCutoff_(0) {}
 
   /// IMPORTANT: The move constructor is here to make it easier to perform
   /// the initialization phase, it is not safe to use when there are any
   /// concurrent accesses (this is not checked).
-  MPMCQueueBase(MPMCQueueBase<Derived<T,Atom,Dynamic>>&& rhs) noexcept
-    : capacity_(rhs.capacity_)
-    , slots_(rhs.slots_)
-    , stride_(rhs.stride_)
-    , dstate_(rhs.dstate_.load(std::memory_order_relaxed))
-    , dcapacity_(rhs.dcapacity_.load(std::memory_order_relaxed))
-    , pushTicket_(rhs.pushTicket_.load(std::memory_order_relaxed))
-    , popTicket_(rhs.popTicket_.load(std::memory_order_relaxed))
-    , pushSpinCutoff_(rhs.pushSpinCutoff_.load(std::memory_order_relaxed))
-    , popSpinCutoff_(rhs.popSpinCutoff_.load(std::memory_order_relaxed))
-  {
+  MPMCQueueBase(MPMCQueueBase<Derived<T, Atom, Dynamic>>&& rhs) noexcept
+      : capacity_(rhs.capacity_),
+        slots_(rhs.slots_),
+        stride_(rhs.stride_),
+        dstate_(rhs.dstate_.load(std::memory_order_relaxed)),
+        dcapacity_(rhs.dcapacity_.load(std::memory_order_relaxed)),
+        pushTicket_(rhs.pushTicket_.load(std::memory_order_relaxed)),
+        popTicket_(rhs.popTicket_.load(std::memory_order_relaxed)),
+        pushSpinCutoff_(rhs.pushSpinCutoff_.load(std::memory_order_relaxed)),
+        popSpinCutoff_(rhs.popSpinCutoff_.load(std::memory_order_relaxed)) {
     // relaxed ops are okay for the previous reads, since rhs queue can't
     // be in concurrent use
 
@@ -700,8 +709,8 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   /// IMPORTANT: The move operator is here to make it easier to perform
   /// the initialization phase, it is not safe to use when there are any
   /// concurrent accesses (this is not checked).
-  MPMCQueueBase<Derived<T,Atom,Dynamic>> const& operator=
-    (MPMCQueueBase<Derived<T,Atom,Dynamic>>&& rhs) {
+  MPMCQueueBase<Derived<T, Atom, Dynamic>> const& operator=(
+      MPMCQueueBase<Derived<T, Atom, Dynamic>>&& rhs) {
     if (this != &rhs) {
       this->~MPMCQueueBase();
       new (this) MPMCQueueBase(std::move(rhs));
@@ -709,11 +718,12 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
     return *this;
   }
 
+  MPMCQueueBase(const MPMCQueueBase&) = delete;
+  MPMCQueueBase& operator=(const MPMCQueueBase&) = delete;
+
   /// MPMCQueue can only be safely destroyed when there are no
   /// pending enqueuers or dequeuers (this is not checked).
-  ~MPMCQueueBase() {
-    delete[] slots_;
-  }
+  ~MPMCQueueBase() { delete[] slots_; }
 
   /// Returns the number of writes (including threads that are blocked waiting
   /// to write) minus the number of reads (including threads that are blocked
@@ -751,9 +761,7 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   }
 
   /// Returns true if there are no items available for dequeue
-  bool isEmpty() const noexcept {
-    return size() <= 0;
-  }
+  bool isEmpty() const noexcept { return size() <= 0; }
 
   /// Returns true if there is currently no empty space to enqueue
   bool isFull() const noexcept {
@@ -767,19 +775,13 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   /// writers could have came before the number of reads was sampled,
   /// and this method doesn't protect against such case.
   /// The returned value can be negative.
-  ssize_t sizeGuess() const noexcept {
-    return writeCount() - readCount();
-  }
+  ssize_t sizeGuess() const noexcept { return writeCount() - readCount(); }
 
   /// Doesn't change
-  size_t capacity() const noexcept {
-    return capacity_;
-  }
+  size_t capacity() const noexcept { return capacity_; }
 
   /// Doesn't change for non-dynamic
-  size_t allocatedCapacity() const noexcept {
-    return capacity_;
-  }
+  size_t allocatedCapacity() const noexcept { return capacity_; }
 
   /// Returns the total number of calls to blockingWrite or successful
   /// calls to write, including those blockingWrite calls that are
@@ -800,10 +802,10 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   /// move, if args is a T rvalue, via copy, if args is a T lvalue, or
   /// via emplacement if args is an initializer list that can be passed
   /// to a T constructor.
-  template <typename ...Args>
+  template <typename... Args>
   void blockingWrite(Args&&... args) noexcept {
-    enqueueWithTicketBase(pushTicket_++, slots_, capacity_, stride_,
-                          std::forward<Args>(args)...);
+    enqueueWithTicketBase(
+        pushTicket_++, slots_, capacity_, stride_, std::forward<Args>(args)...);
   }
 
   /// If an item can be enqueued with no blocking, does so and returns
@@ -819,17 +821,17 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   /// provides an rvalue reference that enables use of a move constructor
   /// or operator.  std::move doesn't actually move anything.  It could
   /// more accurately be called std::rvalue_cast or std::move_permission.
-  template <typename ...Args>
+  template <typename... Args>
   bool write(Args&&... args) noexcept {
     uint64_t ticket;
     Slot* slots;
     size_t cap;
     int stride;
-    if (static_cast<Derived<T,Atom,Dynamic>*>(this)->
-        tryObtainReadyPushTicket(ticket, slots, cap, stride)) {
+    if (static_cast<Derived<T, Atom, Dynamic>*>(this)->tryObtainReadyPushTicket(
+            ticket, slots, cap, stride)) {
       // we have pre-validated that the ticket won't block
-      enqueueWithTicketBase(ticket, slots, cap, stride,
-                            std::forward<Args>(args)...);
+      enqueueWithTicketBase(
+          ticket, slots, cap, stride, std::forward<Args>(args)...);
       return true;
     } else {
       return false;
@@ -837,18 +839,18 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   }
 
   template <class Clock, typename... Args>
-  bool tryWriteUntil(const std::chrono::time_point<Clock>& when,
-                     Args&&... args) noexcept {
+  bool tryWriteUntil(
+      const std::chrono::time_point<Clock>& when, Args&&... args) noexcept {
     uint64_t ticket;
     Slot* slots;
     size_t cap;
     int stride;
     if (tryObtainPromisedPushTicketUntil(ticket, slots, cap, stride, when)) {
-        // we have pre-validated that the ticket won't block, or rather that
-        // it won't block longer than it takes another thread to dequeue an
-        // element from the slot it identifies.
-      enqueueWithTicketBase(ticket, slots, cap, stride,
-                            std::forward<Args>(args)...);
+      // we have pre-validated that the ticket won't block, or rather that
+      // it won't block longer than it takes another thread to dequeue an
+      // element from the slot it identifies.
+      enqueueWithTicketBase(
+          ticket, slots, cap, stride, std::forward<Args>(args)...);
       return true;
     } else {
       return false;
@@ -868,18 +870,18 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   /// This method is required if you are composing queues and managing
   /// your own wakeup, because it guarantees that after every successful
   /// write a readIfNotEmpty will succeed.
-  template <typename ...Args>
+  template <typename... Args>
   bool writeIfNotFull(Args&&... args) noexcept {
     uint64_t ticket;
     Slot* slots;
     size_t cap;
     int stride;
-    if (static_cast<Derived<T,Atom,Dynamic>*>(this)->
-        tryObtainPromisedPushTicket(ticket, slots, cap, stride)) {
+    if (static_cast<Derived<T, Atom, Dynamic>*>(this)
+            ->tryObtainPromisedPushTicket(ticket, slots, cap, stride)) {
       // some other thread is already dequeuing the slot into which we
       // are going to enqueue, but we might have to wait for them to finish
-      enqueueWithTicketBase(ticket, slots, cap, stride,
-                            std::forward<Args>(args)...);
+      enqueueWithTicketBase(
+          ticket, slots, cap, stride, std::forward<Args>(args)...);
       return true;
     } else {
       return false;
@@ -890,8 +892,8 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   /// is available
   void blockingRead(T& elem) noexcept {
     uint64_t ticket;
-    static_cast<Derived<T,Atom,Dynamic>*>(this)->
-      blockingReadWithTicket(ticket, elem);
+    static_cast<Derived<T, Atom, Dynamic>*>(this)->blockingReadWithTicket(
+        ticket, elem);
   }
 
   /// Same as blockingRead() but also records the ticket nunmer
@@ -913,8 +915,8 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
     Slot* slots;
     size_t cap;
     int stride;
-    if (static_cast<Derived<T,Atom,Dynamic>*>(this)->
-        tryObtainReadyPopTicket(ticket, slots, cap, stride)) {
+    if (static_cast<Derived<T, Atom, Dynamic>*>(this)->tryObtainReadyPopTicket(
+            ticket, slots, cap, stride)) {
       // the ticket has been pre-validated to not block
       dequeueWithTicketBase(ticket, slots, cap, stride, elem);
       return true;
@@ -925,8 +927,7 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
 
   template <class Clock, typename... Args>
   bool tryReadUntil(
-      const std::chrono::time_point<Clock>& when,
-      T& elem) noexcept {
+      const std::chrono::time_point<Clock>& when, T& elem) noexcept {
     uint64_t ticket;
     Slot* slots;
     size_t cap;
@@ -952,8 +953,8 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
     Slot* slots;
     size_t cap;
     int stride;
-    if (static_cast<Derived<T,Atom,Dynamic>*>(this)->
-        tryObtainPromisedPopTicket(ticket, slots, cap, stride)) {
+    if (static_cast<Derived<T, Atom, Dynamic>*>(this)
+            ->tryObtainPromisedPopTicket(ticket, slots, cap, stride)) {
       // the matching enqueue already has a ticket, but might not be done
       dequeueWithTicketBase(ticket, slots, cap, stride, elem);
       return true;
@@ -971,11 +972,12 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
     /// To avoid false sharing in slots_ with neighboring memory
     /// allocations, we pad it with this many SingleElementQueue-s at
     /// each end
-    kSlotPadding = (CacheLocality::kFalseSharingRange - 1) / sizeof(Slot) + 1
+    kSlotPadding =
+        (hardware_destructive_interference_size - 1) / sizeof(Slot) + 1
   };
 
   /// The maximum number of items in the queue at once
-  size_t FOLLY_ALIGN_TO_AVOID_FALSE_SHARING capacity_;
+  alignas(hardware_destructive_interference_size) size_t capacity_;
 
   /// Anonymous union for use when Dynamic = false and true, respectively
   union {
@@ -997,7 +999,7 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
     Atom<int> dstride_;
   };
 
-  /// The following two memebers are used by dynamic MPMCQueue.
+  /// The following two members are used by dynamic MPMCQueue.
   /// Ideally they should be in MPMCQueue<T,Atom,true>, but we get
   /// better cache locality if they are in the same cache line as
   /// dslots_ and dstride_.
@@ -1008,22 +1010,23 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   Atom<size_t> dcapacity_;
 
   /// Enqueuers get tickets from here
-  Atom<uint64_t> FOLLY_ALIGN_TO_AVOID_FALSE_SHARING pushTicket_;
+  alignas(hardware_destructive_interference_size) Atom<uint64_t> pushTicket_;
 
   /// Dequeuers get tickets from here
-  Atom<uint64_t> FOLLY_ALIGN_TO_AVOID_FALSE_SHARING popTicket_;
+  alignas(hardware_destructive_interference_size) Atom<uint64_t> popTicket_;
 
   /// This is how many times we will spin before using FUTEX_WAIT when
   /// the queue is full on enqueue, adaptively computed by occasionally
   /// spinning for longer and smoothing with an exponential moving average
-  Atom<uint32_t> FOLLY_ALIGN_TO_AVOID_FALSE_SHARING pushSpinCutoff_;
+  alignas(
+      hardware_destructive_interference_size) Atom<uint32_t> pushSpinCutoff_;
 
   /// The adaptive spin cutoff when the queue is empty on dequeue
-  Atom<uint32_t> FOLLY_ALIGN_TO_AVOID_FALSE_SHARING popSpinCutoff_;
+  alignas(hardware_destructive_interference_size) Atom<uint32_t> popSpinCutoff_;
 
   /// Alignment doesn't prevent false sharing at the end of the struct,
   /// so fill out the last cache line
-  char padding_[CacheLocality::kFalseSharingRange - sizeof(Atom<uint32_t>)];
+  char pad_[hardware_destructive_interference_size - sizeof(Atom<uint32_t>)];
 
   /// We assign tickets in increasing order, but we don't want to
   /// access neighboring elements of slots_ because that will lead to
@@ -1045,7 +1048,7 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   /// SingleElementQueue, but since we have capacity_ of them that could
   /// waste a lot of space.
   static int computeStride(size_t capacity) noexcept {
-    static const int smallPrimes[] = { 2, 3, 5, 7, 11, 13, 17, 19, 23 };
+    static const int smallPrimes[] = {2, 3, 5, 7, 11, 13, 17, 19, 23};
 
     int bestStride = 1;
     size_t bestSep = 1;
@@ -1080,15 +1083,13 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   /// won't block.  Returns true on immediate success, false on immediate
   /// failure.
   bool tryObtainReadyPushTicket(
-    uint64_t& ticket, Slot*& slots, size_t& cap, int& stride
-  ) noexcept {
+      uint64_t& ticket, Slot*& slots, size_t& cap, int& stride) noexcept {
     ticket = pushTicket_.load(std::memory_order_acquire); // A
     slots = slots_;
     cap = capacity_;
     stride = stride_;
     while (true) {
-      if (!slots[idx(ticket, cap, stride)]
-          .mayEnqueue(turn(ticket, cap))) {
+      if (!slots[idx(ticket, cap, stride)].mayEnqueue(turn(ticket, cap))) {
         // if we call enqueue(ticket, ...) on the SingleElementQueue
         // right now it would block, but this might no longer be the next
         // ticket.  We can increase the chance of tryEnqueue success under
@@ -1117,22 +1118,27 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   /// ticket is filled on success AND failure.
   template <class Clock>
   bool tryObtainPromisedPushTicketUntil(
-    uint64_t& ticket, Slot*& slots, size_t& cap, int& stride,
-    const std::chrono::time_point<Clock>& when
-  ) noexcept {
+      uint64_t& ticket,
+      Slot*& slots,
+      size_t& cap,
+      int& stride,
+      const std::chrono::time_point<Clock>& when) noexcept {
     bool deadlineReached = false;
     while (!deadlineReached) {
-      if (static_cast<Derived<T,Atom,Dynamic>*>(this)->
-          tryObtainPromisedPushTicket(ticket, slots, cap, stride)) {
+      if (static_cast<Derived<T, Atom, Dynamic>*>(this)
+              ->tryObtainPromisedPushTicket(ticket, slots, cap, stride)) {
         return true;
       }
       // ticket is a blocking ticket until the preceding ticket has been
       // processed: wait until this ticket's turn arrives. We have not reserved
       // this ticket so we will have to re-attempt to get a non-blocking ticket
       // if we wake up before we time-out.
-      deadlineReached = !slots[idx(ticket, cap, stride)]
-        .tryWaitForEnqueueTurnUntil(turn(ticket, cap), pushSpinCutoff_,
-                                    (ticket % kAdaptationFreq) == 0, when);
+      deadlineReached =
+          !slots[idx(ticket, cap, stride)].tryWaitForEnqueueTurnUntil(
+              turn(ticket, cap),
+              pushSpinCutoff_,
+              (ticket % kAdaptationFreq) == 0,
+              when);
     }
     return false;
   }
@@ -1143,8 +1149,7 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   /// other thread's pop is still in progress (ticket has been granted but
   /// pop has not yet completed).
   bool tryObtainPromisedPushTicket(
-    uint64_t& ticket, Slot*& slots, size_t& cap, int& stride
-  ) noexcept {
+      uint64_t& ticket, Slot*& slots, size_t& cap, int& stride) noexcept {
     auto numPushes = pushTicket_.load(std::memory_order_acquire); // A
     slots = slots_;
     cap = capacity_;
@@ -1170,15 +1175,13 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   /// won't block.  Returns true on immediate success, false on immediate
   /// failure.
   bool tryObtainReadyPopTicket(
-    uint64_t& ticket, Slot*& slots, size_t& cap, int& stride
-  ) noexcept {
+      uint64_t& ticket, Slot*& slots, size_t& cap, int& stride) noexcept {
     ticket = popTicket_.load(std::memory_order_acquire);
     slots = slots_;
     cap = capacity_;
     stride = stride_;
     while (true) {
-      if (!slots[idx(ticket, cap, stride)]
-          .mayDequeue(turn(ticket, cap))) {
+      if (!slots[idx(ticket, cap, stride)].mayDequeue(turn(ticket, cap))) {
         auto prev = ticket;
         ticket = popTicket_.load(std::memory_order_acquire);
         if (prev == ticket) {
@@ -1234,8 +1237,7 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   /// have to block waiting for them to finish executing code inside the
   /// MPMCQueue itself.
   bool tryObtainPromisedPopTicket(
-    uint64_t& ticket, Slot*& slots, size_t& cap, int& stride
-  ) noexcept {
+      uint64_t& ticket, Slot*& slots, size_t& cap, int& stride) noexcept {
     auto numPops = popTicket_.load(std::memory_order_acquire); // A
     slots = slots_;
     cap = capacity_;
@@ -1256,34 +1258,36 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
   }
 
   // Given a ticket, constructs an enqueued item using args
-  template <typename ...Args>
+  template <typename... Args>
   void enqueueWithTicketBase(
-    uint64_t ticket, Slot* slots, size_t cap, int stride, Args&&... args
-  ) noexcept {
-    slots[idx(ticket, cap, stride)]
-      .enqueue(turn(ticket, cap),
-               pushSpinCutoff_,
-               (ticket % kAdaptationFreq) == 0,
-               std::forward<Args>(args)...);
+      uint64_t ticket,
+      Slot* slots,
+      size_t cap,
+      int stride,
+      Args&&... args) noexcept {
+    slots[idx(ticket, cap, stride)].enqueue(
+        turn(ticket, cap),
+        pushSpinCutoff_,
+        (ticket % kAdaptationFreq) == 0,
+        std::forward<Args>(args)...);
   }
 
   // To support tracking ticket numbers in MPMCPipelineStageImpl
-  template <typename ...Args>
+  template <typename... Args>
   void enqueueWithTicket(uint64_t ticket, Args&&... args) noexcept {
-    enqueueWithTicketBase(ticket, slots_, capacity_, stride_,
-                          std::forward<Args>(args)...);
+    enqueueWithTicketBase(
+        ticket, slots_, capacity_, stride_, std::forward<Args>(args)...);
   }
 
   // Given a ticket, dequeues the corresponding element
   void dequeueWithTicketBase(
-    uint64_t ticket, Slot* slots, size_t cap, int stride, T& elem
-  ) noexcept {
+      uint64_t ticket, Slot* slots, size_t cap, int stride, T& elem) noexcept {
     assert(cap != 0);
-    slots[idx(ticket, cap, stride)]
-      .dequeue(turn(ticket, cap),
-               popSpinCutoff_,
-               (ticket % kAdaptationFreq) == 0,
-               elem);
+    slots[idx(ticket, cap, stride)].dequeue(
+        turn(ticket, cap),
+        popSpinCutoff_,
+        (ticket % kAdaptationFreq) == 0,
+        elem);
   }
 };
 
@@ -1293,7 +1297,6 @@ class MPMCQueueBase<Derived<T, Atom, Dynamic>> : boost::noncopyable {
 /// used by SingleElementQueue are doubled inside the TurnSequencer
 template <typename T, template <typename> class Atom>
 struct SingleElementQueue {
-
   ~SingleElementQueue() noexcept {
     if ((sequencer_.uncompletedTurnLSB() & 1) == 1) {
       // we are pending a dequeue, so we have a constructed item
@@ -1302,13 +1305,15 @@ struct SingleElementQueue {
   }
 
   /// enqueue using in-place noexcept construction
-  template <typename ...Args,
-            typename = typename std::enable_if<
-              std::is_nothrow_constructible<T,Args...>::value>::type>
-  void enqueue(const uint32_t turn,
-               Atom<uint32_t>& spinCutoff,
-               const bool updateSpinCutoff,
-               Args&&... args) noexcept {
+  template <
+      typename... Args,
+      typename = typename std::enable_if<
+          std::is_nothrow_constructible<T, Args...>::value>::type>
+  void enqueue(
+      const uint32_t turn,
+      Atom<uint32_t>& spinCutoff,
+      const bool updateSpinCutoff,
+      Args&&... args) noexcept {
     sequencer_.waitForTurn(turn * 2, spinCutoff, updateSpinCutoff);
     new (&contents_) T(std::forward<Args>(args)...);
     sequencer_.completeTurn(turn * 2);
@@ -1332,8 +1337,10 @@ struct SingleElementQueue {
         spinCutoff,
         updateSpinCutoff,
         std::move(goner),
-        typename std::conditional<std::is_nothrow_constructible<T,T&&>::value,
-                                  ImplByMove, ImplByRelocation>::type());
+        typename std::conditional<
+            std::is_nothrow_constructible<T, T&&>::value,
+            ImplByMove,
+            ImplByRelocation>::type());
   }
 
   /// Waits until either:
@@ -1355,17 +1362,20 @@ struct SingleElementQueue {
     return sequencer_.isTurn(turn * 2);
   }
 
-  void dequeue(uint32_t turn,
-               Atom<uint32_t>& spinCutoff,
-               const bool updateSpinCutoff,
-               T& elem) noexcept {
-    dequeueImpl(turn,
-                spinCutoff,
-                updateSpinCutoff,
-                elem,
-                typename std::conditional<folly::IsRelocatable<T>::value,
-                                          ImplByRelocation,
-                                          ImplByMove>::type());
+  void dequeue(
+      uint32_t turn,
+      Atom<uint32_t>& spinCutoff,
+      const bool updateSpinCutoff,
+      T& elem) noexcept {
+    dequeueImpl(
+        turn,
+        spinCutoff,
+        updateSpinCutoff,
+        elem,
+        typename std::conditional<
+            folly::IsRelocatable<T>::value,
+            ImplByRelocation,
+            ImplByMove>::type());
   }
 
   /// Waits until either:
@@ -1389,14 +1399,12 @@ struct SingleElementQueue {
 
  private:
   /// Storage for a T constructed with placement new
-  typename std::aligned_storage<sizeof(T),alignof(T)>::type contents_;
+  aligned_storage_for_t<T> contents_;
 
   /// Even turns are pushes, odd turns are pops
   TurnSequencer<Atom> sequencer_;
 
-  T* ptr() noexcept {
-    return static_cast<T*>(static_cast<void*>(&contents_));
-  }
+  T* ptr() noexcept { return static_cast<T*>(static_cast<void*>(&contents_)); }
 
   void destroyContents() noexcept {
     try {
@@ -1404,9 +1412,9 @@ struct SingleElementQueue {
     } catch (...) {
       // g++ doesn't seem to have std::is_nothrow_destructible yet
     }
-#ifndef NDEBUG
-    memset(&contents_, 'Q', sizeof(T));
-#endif
+    if (kIsDebug) {
+      memset(&contents_, 'Q', sizeof(T));
+    }
   }
 
   /// Tag classes for dispatching to enqueue/dequeue implementation.
@@ -1414,11 +1422,12 @@ struct SingleElementQueue {
   struct ImplByMove {};
 
   /// enqueue using nothrow move construction.
-  void enqueueImpl(const uint32_t turn,
-                   Atom<uint32_t>& spinCutoff,
-                   const bool updateSpinCutoff,
-                   T&& goner,
-                   ImplByMove) noexcept {
+  void enqueueImpl(
+      const uint32_t turn,
+      Atom<uint32_t>& spinCutoff,
+      const bool updateSpinCutoff,
+      T&& goner,
+      ImplByMove) noexcept {
     sequencer_.waitForTurn(turn * 2, spinCutoff, updateSpinCutoff);
     new (&contents_) T(std::move(goner));
     sequencer_.completeTurn(turn * 2);
@@ -1426,40 +1435,49 @@ struct SingleElementQueue {
 
   /// enqueue by simulating nothrow move with relocation, followed by
   /// default construction to a noexcept relocation.
-  void enqueueImpl(const uint32_t turn,
-                   Atom<uint32_t>& spinCutoff,
-                   const bool updateSpinCutoff,
-                   T&& goner,
-                   ImplByRelocation) noexcept {
+  void enqueueImpl(
+      const uint32_t turn,
+      Atom<uint32_t>& spinCutoff,
+      const bool updateSpinCutoff,
+      T&& goner,
+      ImplByRelocation) noexcept {
     sequencer_.waitForTurn(turn * 2, spinCutoff, updateSpinCutoff);
-    memcpy(&contents_, &goner, sizeof(T));
+    memcpy(
+        static_cast<void*>(&contents_),
+        static_cast<void const*>(&goner),
+        sizeof(T));
     sequencer_.completeTurn(turn * 2);
     new (&goner) T();
   }
 
   /// dequeue by destructing followed by relocation.  This version is preferred,
   /// because as much work as possible can be done before waiting.
-  void dequeueImpl(uint32_t turn,
-                   Atom<uint32_t>& spinCutoff,
-                   const bool updateSpinCutoff,
-                   T& elem,
-                   ImplByRelocation) noexcept {
+  void dequeueImpl(
+      uint32_t turn,
+      Atom<uint32_t>& spinCutoff,
+      const bool updateSpinCutoff,
+      T& elem,
+      ImplByRelocation) noexcept {
     try {
       elem.~T();
     } catch (...) {
       // unlikely, but if we don't complete our turn the queue will die
     }
     sequencer_.waitForTurn(turn * 2 + 1, spinCutoff, updateSpinCutoff);
-    memcpy(&elem, &contents_, sizeof(T));
+    memcpy(
+        static_cast<void*>(&elem),
+        static_cast<void const*>(&contents_),
+        sizeof(T));
     sequencer_.completeTurn(turn * 2 + 1);
   }
 
   /// dequeue by nothrow move assignment.
-  void dequeueImpl(uint32_t turn,
-                   Atom<uint32_t>& spinCutoff,
-                   const bool updateSpinCutoff,
-                   T& elem,
-                   ImplByMove) noexcept {
+  void dequeueImpl(
+      uint32_t turn,
+      Atom<uint32_t>& spinCutoff,
+      const bool updateSpinCutoff,
+      T& elem,
+      ImplByMove) noexcept {
     sequencer_.waitForTurn(turn * 2 + 1, spinCutoff, updateSpinCutoff);
     elem = std::move(*ptr());
     destroyContents();

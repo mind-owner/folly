@@ -1,11 +1,11 @@
 /*
- * Copyright 2004-present Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,9 +17,10 @@
 #pragma once
 
 #include <chrono>
-#include <stdint.h>
+#include <cstdint>
 
 #include <folly/Function.h>
+#include <folly/Optional.h>
 
 namespace folly {
 
@@ -33,12 +34,11 @@ class AsyncTimeout;
 class TimeoutManager {
  public:
   typedef std::chrono::milliseconds timeout_type;
+  typedef std::chrono::microseconds timeout_type_high_res;
+
   using Func = folly::Function<void()>;
 
-  enum class InternalEnum {
-    INTERNAL,
-    NORMAL
-  };
+  enum class InternalEnum { INTERNAL, NORMAL };
 
   TimeoutManager();
 
@@ -47,15 +47,20 @@ class TimeoutManager {
   /**
    * Attaches/detaches TimeoutManager to AsyncTimeout
    */
-  virtual void attachTimeoutManager(AsyncTimeout* obj,
-                                    InternalEnum internal) = 0;
+  virtual void attachTimeoutManager(
+      AsyncTimeout* obj, InternalEnum internal) = 0;
   virtual void detachTimeoutManager(AsyncTimeout* obj) = 0;
 
   /**
    * Schedules AsyncTimeout to fire after `timeout` milliseconds
    */
-  virtual bool scheduleTimeout(AsyncTimeout* obj,
-                               timeout_type timeout) = 0;
+  virtual bool scheduleTimeout(AsyncTimeout* obj, timeout_type timeout) = 0;
+
+  /**
+   * Schedules AsyncTimeout to fire after `timeout` microseconds
+   */
+  virtual bool scheduleTimeoutHighRes(
+      AsyncTimeout* obj, timeout_type_high_res timeout);
 
   /**
    * Cancels the AsyncTimeout, if scheduled
@@ -103,4 +108,4 @@ class TimeoutManager {
   std::unique_ptr<CobTimeouts> cobTimeouts_;
 };
 
-} // folly
+} // namespace folly

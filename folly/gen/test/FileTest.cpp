@@ -1,11 +1,11 @@
 /*
- * Copyright 2017 Facebook, Inc.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,12 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include <folly/File.h>
+
 #include <string>
 #include <vector>
 
-#include <folly/Array.h>
-#include <folly/File.h>
 #include <folly/Range.h>
+#include <folly/container/Array.h>
 #include <folly/experimental/TestUtil.h>
 #include <folly/gen/Base.h>
 #include <folly/gen/File.h>
@@ -26,7 +28,6 @@
 
 using namespace folly::gen;
 using namespace folly;
-using std::string;
 using std::vector;
 
 TEST(FileGen, ByLine) {
@@ -58,8 +59,8 @@ TEST(FileGen, ByLine) {
 }
 
 TEST(FileGen, ByLineFull) {
-  auto cases = std::vector<std::string> {
-       stripLeftMargin(R"(
+  auto cases = std::vector<std::string>{
+      stripLeftMargin(R"(
          Hello world
          This is the second line
 
@@ -67,11 +68,12 @@ TEST(FileGen, ByLineFull) {
          a few empty lines above
          incomplete last line)"),
 
-         "complete last line\n",
+      "complete last line\n",
 
-         "\n",
+      "\n",
 
-         ""};
+      "",
+  };
 
   for (auto& lines : cases) {
     test::TemporaryFile file("ByLineFull");
@@ -113,11 +115,12 @@ TEST(FileGenBufferedTest, FileWriterSimple) {
 
   auto squares = seq(1, 100) | map([](int x) { return x * x; });
   squares | map(toLine) | eachAs<StringPiece>() | toFile(File(file.fd()));
-  EXPECT_EQ(squares | sum,
-            byLine(File(file.path().string().c_str())) | eachTo<int>() | sum);
+  EXPECT_EQ(
+      squares | sum,
+      byLine(File(file.path().string().c_str())) | eachTo<int>() | sum);
 }
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     DifferentBufferSizes,
     FileGenBufferedTest,
     ::testing::Values(0, 1, 2, 4, 8, 64, 4096));
